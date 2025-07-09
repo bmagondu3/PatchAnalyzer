@@ -1,5 +1,6 @@
 # PatchAnalyzer/views/main_page.py
 from __future__ import annotations
+
 from pathlib import Path
 import pandas as pd
 import pyqtgraph as pg
@@ -12,134 +13,138 @@ logger = setup_logger(__name__)
 
 
 class MainPage(QtWidgets.QWidget):
-    """Page 1 – scatter map (left) + cell/voltage images (right)."""
+    """Three always-square panes + fixed-height button bar (no grey gaps)."""
 
+    group_requested = QtCore.pyqtSignal(pd.DataFrame)
+    back_requested  = QtCore.pyqtSignal()
+
+    # ------------------------------------------------------------------ init
     def __init__(self, meta_df: pd.DataFrame, parent=None):
         super().__init__(parent)
         self.meta_df = meta_df.reset_index(drop=True)
-
-        self.unique_coords = (
-            self.meta_df[["stage_x", "stage_y", "stage_z"]]
-            .drop_duplicates()
-            .reset_index(drop=True)
-        )
-        self.coord_to_repr = (
-            self.meta_df.groupby(["stage_x", "stage_y", "stage_z"])
-            .head(1)
-            .reset_index()
-            .set_index(["stage_x", "stage_y", "stage_z"])["index"]
-            .to_dict()
-        )
+        self._frames: list[QtWidgets.QFrame] = []           # panes to resize
+        self._btn_bar: QtWidgets.QWidget | None = None      # will hold buttons
 
         self._build_ui()
         self._populate_scatter()
 
-    # ------------------------------------------------------------------ UI
-# ------------------------------------------------------------------ UI
-    def _build_ui(self):
-        base = QtWidgets.QHBoxLayout(self)
-        base.setContentsMargins(8, 8, 8, 8)
+    # -------------------------------------------------------------------- UI
+    def _build_ui(self) -> None:
+        self.setContentsMargins(0, 0, 0, 0)
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ── LEFT : scatter plot ──────────────────────────────────────────
+        # helper → bordered square frame for one pane
+        def square_frame(widget: QtWidgets.QWidget) -> QtWidgets.QFrame:
+            frame = QtWidgets.QFrame()
+            frame.setFrameShape(QtWidgets.QFrame.Box)
+            frame.setLineWidth(1)
+            frame.setSizePolicy(QtWidgets.QSizePolicy.Fixed,
+                                QtWidgets.QSizePolicy.Expanding)
+
+            lay = QtWidgets.QVBoxLayout(frame)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(widget)
+            self._frames.append(frame)
+            return frame
+
+        # ── TOP ROW : 3 panes ──────────────────────────────────────────
+        top = QtWidgets.QHBoxLayout()
+        top.setSpacing(0)
+        root.addLayout(top, stretch=1)
+
+        # scatter
         self.plot = pg.PlotWidget(background="w")
-        base.addWidget(self.plot, 1)            # stretch factor 1
+        self.plot.getPlotItem().getViewBox().setAspectLocked(True)
+        top.addWidget(square_frame(self.plot))
 
-        # ── RIGHT : images (top-half) + big buttons (bottom-half) ───────
-        right = QtWidgets.QVBoxLayout()
-        base.addLayout(right, 1)                # stretch factor 1 (same width)
-
-        # ── TOP-half (images) ───────────────────────────────────────────
-        imgs = QtWidgets.QHBoxLayout()
-        right.addLayout(imgs, stretch=1)        # stretch 1  → top 50 %
-
+        # cell
         self.label_cell = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
-        self.label_cell.setFrameShape(QtWidgets.QFrame.Box)
-        self.label_cell.setMinimumSize(300, 300)
-        imgs.addWidget(self.label_cell, 1)
+        top.addWidget(square_frame(self.label_cell))
 
+        # voltage
         self.label_voltage = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
-        self.label_voltage.setFrameShape(QtWidgets.QFrame.Box)
-        self.label_voltage.setMinimumSize(300, 300)
-        imgs.addWidget(self.label_voltage, 1)
+        top.addWidget(square_frame(self.label_voltage))
 
-        # ── BOTTOM-half (stacked buttons) ────────────────────────────────
-        btn_box = QtWidgets.QVBoxLayout()
-        right.addLayout(btn_box, stretch=1)     # stretch 1  → bottom 50 %
+        # top.addStretch(1)   # tiny residual width goes to the right edge
 
-        btn_style = "font-size: 24px; padding: 20px;"           # ⤴ bigger
+        # ── BOTTOM : fixed-height button bar ───────────────────────────
+        self._btn_bar = QtWidgets.QWidget()
+        bar_lay = QtWidgets.QHBoxLayout(self._btn_bar)
+        bar_lay.setContentsMargins(0, 0, 0, 0)
+        bar_lay.setSpacing(0)
+
+        bar_lay.addStretch(1)
+
+        
+        self.btn_back = QtWidgets.QPushButton("← Back")
+        bar_lay.addWidget(self.btn_back)
+
         self.btn_group = QtWidgets.QPushButton("Group Cells ▶")
-        self.btn_group.setStyleSheet(btn_style)
-        self.btn_group.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
-                                    QtWidgets.QSizePolicy.Expanding)
-        btn_box.addWidget(self.btn_group, 1)    # equal share of 50 %
+        bar_lay.addWidget(self.btn_group)
 
-        self.btn_skip = QtWidgets.QPushButton("Skip Grouping ➜")
-        self.btn_skip.setStyleSheet(btn_style)
-        self.btn_skip.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
-                                    QtWidgets.QSizePolicy.Expanding)
-        btn_box.addWidget(self.btn_skip, 1)     # stacked under “Group”
+        # lock bar height to its sizeHint so it never stretches
+        self._btn_bar.setFixedHeight(self._btn_bar.sizeHint().height())
+        root.addWidget(self._btn_bar)
 
+        # wire-up buttons
+        self.btn_group.clicked.connect(self._on_group_clicked)
+        self.btn_back.clicked.connect(self.back_requested.emit)
 
-    # ---------------------------------------------------------- scatter map
-    def _populate_scatter(self):
-        """Create one dot for every row in meta_df."""
+    # ---------------------------------------------------------------- scatter
+    def _populate_scatter(self) -> None:
         spots = [
-            dict(
-                pos=(row.stage_x, row.stage_y),
-                data=int(i),                     # store dataframe row index
-                size=10,
-                symbol="o",
-                brush=pg.mkBrush(30, 144, 255, 150),
-                pen=pg.mkPen(None),
-            )
+            dict(pos=(row.stage_x, row.stage_y), data=int(i),
+                 size=10, symbol="o",
+                 brush=pg.mkBrush(30, 144, 255, 150),
+                 pen=pg.mkPen(None))
             for i, row in self.meta_df.iterrows()
         ]
-
         self.scatter = pg.ScatterPlotItem()
         self.scatter.addPoints(spots)
         self.scatter.sigClicked.connect(self._on_point_clicked)
         self.plot.addItem(self.scatter)
-            # Optional: initial label text
+
         self.label_cell.setText("Select a cell")
         self.label_voltage.setText("Select a cell")
 
-    # ---------------------------------------------------- event: point click
-    def _on_point_clicked(self, _, points):
-        logger.debug("🖱  clicked! %s", points[0].pos())
-        df_idx = int(points[0].data())          # DataFrame row index
-        row    = self.meta_df.loc[df_idx]
+    # ---------------------------------------------------------------- resize
+    def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
+        """Resize all three panes to the same square, consuming all height."""
+        bar_h  = self._btn_bar.height()
+        avail_h = self.height() - bar_h
+        avail_w = self.width()
+        side = int(min(avail_h, avail_w / 3))
 
-        self._show_cell_image(row)
-        self._show_voltage_image(row)
+        for f in self._frames:
+            f.setFixedSize(side, side)
 
-        # highlight selection
+        super().resizeEvent(ev)
+
+    # ---------------------------------------------------------------- click
+    def _on_point_clicked(self, _, pts):
+        idx = int(pts[0].data())
+        row = self.meta_df.loc[idx]
+
+        self._show(self.label_cell,
+                   Path(row["src_dir"]) / "CellMetadata" / row["image"])
+        self._show(self.label_voltage,
+                   find_voltage_image(Path(row["src_dir"]), row["image"]))
+
         for p in self.scatter.points():
             p.resetPen()
-        points[0].setPen(pg.mkPen(width=2, color="g"))
-    # --------------------------------------------------- helper: images
-    def _show_cell_image(self, row):
-        self.label_cell.clear()  
-        self.label_cell.setPixmap(QtGui.QPixmap())
-        img_path = row["src_dir"] / "CellMetadata" / row["image"]
-        logger.debug("CELL → %s", img_path)
-        pm = QtGui.QPixmap(str(img_path))
-        if not pm.isNull():
-            self.label_cell.setPixmap(
-                pm.scaled(self.label_cell.size(), QtCore.Qt.KeepAspectRatio)
-            )
-        else:
-            self.label_cell.setText("No image")
+        pts[0].setPen(pg.mkPen(width=2, color="g"))
 
-    def _show_voltage_image(self, row):
-        self.label_voltage.clear()  
-        self.label_voltage.setPixmap(QtGui.QPixmap()) 
-        png = find_voltage_image(row["src_dir"], row["image"])
-        logger.debug("VOLT → %s", png) 
-        if png:
-            pm = QtGui.QPixmap(str(png))
-            self.label_voltage.setPixmap(
-                pm.scaled(self.label_voltage.size(), QtCore.Qt.KeepAspectRatio)
-            )
+    # ---------------------------------------------------------------- utils
+    def _show(self, lbl: QtWidgets.QLabel, path: Path | None) -> None:
+        lbl.clear()
+        if path and (pm := QtGui.QPixmap(str(path))) and not pm.isNull():
+            lbl.setPixmap(pm.scaled(
+                lbl.size(), QtCore.Qt.KeepAspectRatioByExpanding,
+                QtCore.Qt.SmoothTransformation))
         else:
-            self.label_voltage.setText("No voltage image")
+            lbl.setText("No image")
 
+    def _on_group_clicked(self):
+        self.group_requested.emit(self.meta_df)
