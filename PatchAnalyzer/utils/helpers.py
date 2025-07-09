@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-CELL_ID_RE = re.compile(r"cell[_\-]?(\d+)", re.IGNORECASE)
+_CELL_RE = re.compile(r"cell[_\-]?(\d+)", re.IGNORECASE)  # extract the id
 
 
 def find_cell_metadata(folder: Path) -> Path | None:
@@ -11,29 +11,25 @@ def find_cell_metadata(folder: Path) -> Path | None:
     meta = folder / "CellMetadata" / "cell_metadata.csv"
     return meta if meta.exists() else None
 
-def find_voltage_image(folder: Path, row_idx: int) -> Path | None:
+
+def find_voltage_image(folder: Path, cell_image_name: str) -> Path | None:
     """
-    Return the *first* VoltageProtocol_<row_idx>.png inside *folder*/VoltageProtocol.
+    Locate VoltageProtocol_<id>.png (case-insensitive) in *folder*/VoltageProtocol.
 
-    Example
-    -------
-    row_idx == 7  ➜  VoltageProtocol_7.png
-
-    Parameters
-    ----------
-    folder
-        The experiment folder (i.e. the same src_dir stored in meta_df).
-    row_idx
-        Original index of the CSV row (already stored in meta_df["row_idx"]).
-
-    Returns
-    -------
-    pathlib.Path or None
-        Path to the PNG if found, else None.
+    Only that exact pattern is accepted — no extra suffixes.
     """
+    m = _CELL_RE.search(cell_image_name)
+    if not m:
+        return None
+    cell_id = m.group(1)
+
     vp_dir = folder / "VoltageProtocol"
     if not vp_dir.exists():
         return None
 
-    target = vp_dir / f"VoltageProtocol_{row_idx}.png"
-    return target if target.exists() else None
+    # Case-insensitive exact filename match
+    target = f"voltageprotocol_{cell_id}.png"
+    for f in vp_dir.iterdir():
+        if f.is_file() and f.name.lower() == target:
+            return f
+    return None

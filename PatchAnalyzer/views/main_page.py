@@ -105,7 +105,7 @@ class MainPage(QtWidgets.QWidget):
 
     # ---------------------------------------------------- event: point click
     def _on_point_clicked(self, _, points):
-        print("🖱  clicked!", points[0].pos())          # <-- add
+        logger.debug("🖱  clicked! %s", points[0].pos())
         df_idx = int(points[0].data())          # DataFrame row index
         row    = self.meta_df.loc[df_idx]
 
@@ -121,7 +121,7 @@ class MainPage(QtWidgets.QWidget):
         self.label_cell.clear()  
         self.label_cell.setPixmap(QtGui.QPixmap())
         img_path = row["src_dir"] / "CellMetadata" / row["image"]
-        print("CELL →", img_path)
+        logger.debug("CELL → %s", img_path)
         pm = QtGui.QPixmap(str(img_path))
         if not pm.isNull():
             self.label_cell.setPixmap(
@@ -133,8 +133,8 @@ class MainPage(QtWidgets.QWidget):
     def _show_voltage_image(self, row):
         self.label_voltage.clear()  
         self.label_voltage.setPixmap(QtGui.QPixmap()) 
-        png = find_voltage_image(row["src_dir"], int(row["row_idx"]))
-        print("VOLT →", png) 
+        png = find_voltage_image(row["src_dir"], row["image"])
+        logger.debug("VOLT → %s", png) 
         if png:
             pm = QtGui.QPixmap(str(png))
             self.label_voltage.setPixmap(
