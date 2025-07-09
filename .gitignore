@@ -1,1 +1,3 @@
 /Data
+/PatchAnalyzer/logs
+*.pyc
