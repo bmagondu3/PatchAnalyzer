@@ -71,6 +71,11 @@ class PatchAnalyzerGUI(QtWidgets.QMainWindow):
     def _open_analysis_page(self, meta_df: pd.DataFrame):
         self.analysis = AnalysisPage(meta_df)
 
+        # NEW ───────── connect “← Back” from AnalysisPage to show GroupPage
+        self.analysis.back_requested.connect(
+            lambda: self.stack.setCurrentWidget(self.group)
+        )
+
         if self.stack.count() < 4:
             self.stack.addWidget(self.analysis)
         else:
@@ -78,3 +83,4 @@ class PatchAnalyzerGUI(QtWidgets.QMainWindow):
             self.stack.addWidget(self.analysis)
 
         self.stack.setCurrentWidget(self.analysis)
+

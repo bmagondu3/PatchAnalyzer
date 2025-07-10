@@ -22,19 +22,26 @@ class GroupPage(QtWidgets.QWidget):
     # --------------------------------------------------------------------- init
     def __init__(self, meta_df: pd.DataFrame, parent=None):
         super().__init__(parent)
+
+        # make a working copy; ensure the “group_label” column exists
         self.meta_df = meta_df.copy()
         if "group_label" not in self.meta_df.columns:
             self.meta_df["group_label"] = ""
 
-        # show just ONE representative row for every unique (x, y, z)
-        self._rows: list[int] = (
-            self.meta_df.groupby(["stage_x", "stage_y", "stage_z"])
-            .head(1)
-            .index
-            .tolist()
+        # ── coordinate → list[indices] mapping ───────────────────────────
+        self._groups_by_coord: dict[tuple[float, float, float], list[int]] = (
+            self.meta_df.groupby(["stage_x", "stage_y", "stage_z"]).indices
         )
-        self._groups: set[str] = set()          # all labels created so far
 
+        # one representative DataFrame index per cell (first in each list)
+        self._rows: list[int] = [idxs[0] for idxs in self._groups_by_coord.values()]
+
+        # existing labels (to pre-populate the combo later)
+        self._groups: set[str] = set(
+            self.meta_df.loc[self.meta_df["group_label"].ne(""), "group_label"].unique()
+        )
+
+        # build UI & fill table
         self._build_ui()
         self._populate_table()
 
@@ -81,8 +88,12 @@ class GroupPage(QtWidgets.QWidget):
     _COLS = ["index", "stage_x", "stage_y", "stage_z", "src_dir", "group_label"]
 
     def _populate_table(self) -> None:
-        """Fill the table then enable click-to-sort on any column."""
-        # 1) turn sorting OFF while we insert rows (avoids flicker / bugs)
+        """
+        Show one row per unique (x,y,z) cell.
+
+        • “index” column now lists the **values from the CSV “index” field**
+          (e.g. 0, 1, 2 …) – not the DataFrame row numbers.
+        """
         self.table.setSortingEnabled(False)
 
         self.table.setColumnCount(len(self._COLS))
@@ -91,38 +102,44 @@ class GroupPage(QtWidgets.QWidget):
         )
         self.table.setRowCount(len(self._rows))
 
-        for row_idx, df_idx in enumerate(self._rows):
-            row = self.meta_df.loc[df_idx]
+        for tbl_row, rep_df_idx in enumerate(self._rows):
+            rep = self.meta_df.loc[rep_df_idx]
+
+            # all DataFrame row-ids for this coordinate triple
+            df_row_list = self._groups_by_coord[
+                (rep.stage_x, rep.stage_y, rep.stage_z)
+            ]
+            # corresponding *CSV index* values
+            cell_idx_vals = [
+                str(self.meta_df.at[i, "index"]) for i in df_row_list
+            ]
+
+            col_vals = {
+                "index": ", ".join(cell_idx_vals),
+                "stage_x": f"{rep.stage_x:.2f}",
+                "stage_y": f"{rep.stage_y:.2f}",
+                "stage_z": f"{rep.stage_z:.2f}",
+                "src_dir": Path(rep["src_dir"]).name,
+                "group_label": rep["group_label"],
+            }
+
             for col_idx, col in enumerate(self._COLS):
-                if col == "src_dir":
-                    display_val = Path(row["src_dir"]).name  # folder only
-                else:
-                    display_val = str(row[col])
+                item = QtWidgets.QTableWidgetItem(col_vals[col])
+                item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
 
-                item = QtWidgets.QTableWidgetItem(display_val)
+                if col == "group_label" and col_vals[col]:
+                    self._style_group_item(item, col_vals[col])
 
-                # lock index & label cells from manual edits
-                if col in ("index", "group_label"):
-                    item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
+                self.table.setItem(tbl_row, col_idx, item)
 
-                if col == "group_label":
-                    self._style_group_item(item, display_val)
-
-                self.table.setItem(row_idx, col_idx, item)
-
-        # 2) NOW enable sorting and make header clickable/with arrow
-        self.table.horizontalHeader().setSectionsClickable(True)
-        self.table.horizontalHeader().setSortIndicatorShown(True)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSortingEnabled(True)
-
-    # ----------------------------------------------------------------- label
+        self.table.resizeColumnsToContents()
+   # ----------------------------------------------------------------- label
     def _assign_label(self) -> None:
         """
-        Ask the user for a group label and apply it to all selected rows.
-
-        • If at least one label already exists, we present a combo box that
-          lists the current labels *and* allows free-text entry (editable=True).
-        • If no labels exist yet, we fall back to a plain text prompt.
+        Prompt for a group label and apply it to every DataFrame row that shares
+        the coordinates of each selected table row.
         """
         sel_rows = self.table.selectionModel().selectedRows()
         if not sel_rows:
@@ -131,21 +148,17 @@ class GroupPage(QtWidgets.QWidget):
             )
             return
 
-        label: str = ""
-
-        if self._groups:  # show existing labels + allow new ones
+        # ask for label (reuse existing labels if any)
+        if self._groups:
             label, ok = QtWidgets.QInputDialog.getItem(
                 self,
                 "Group Label",
                 "Select an existing label or type a new one:",
                 sorted(self._groups),
                 0,
-                True,  # editable
+                True,
             )
-            if not ok:
-                return
-            label = label.strip()
-        else:  # first label ever → simple text box
+        else:
             label, ok = QtWidgets.QInputDialog.getText(
                 self,
                 "Group Label",
@@ -153,29 +166,30 @@ class GroupPage(QtWidgets.QWidget):
                 QtWidgets.QLineEdit.Normal,
                 "",
             )
-            if not ok:
-                return
-            label = label.strip()
+        label = label.strip()
+        if not ok or not label:
+            return
 
-        if not label:
-            return  # user entered nothing
-
-        # record new label
         self._groups.add(label)
         group_col = self._COLS.index("group_label")
 
         for model_index in sel_rows:
             tbl_row = model_index.row()
-            df_idx = self._rows[tbl_row]
+            rep_df_idx = self._rows[tbl_row]
 
-            # update DataFrame
-            self.meta_df.at[df_idx, "group_label"] = label
+            # all rows with the same (x,y,z)
+            coord = tuple(self.meta_df.loc[rep_df_idx][["stage_x", "stage_y", "stage_z"]])
+            mask = (
+                (self.meta_df["stage_x"] == coord[0]) &
+                (self.meta_df["stage_y"] == coord[1]) &
+                (self.meta_df["stage_z"] == coord[2])
+            )
+            self.meta_df.loc[mask, "group_label"] = label
 
-            # update table cell
+            # update table cell for representative row
             item = self.table.item(tbl_row, group_col)
             item.setText(label)
             self._style_group_item(item, label)
-
 
     # ----------------------------------------------------------------- save
     def _save_csv(self) -> None:
