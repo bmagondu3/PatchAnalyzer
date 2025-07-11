@@ -8,6 +8,8 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ..models.ephys_loader import load_voltage_traces_for_indices
+from ..utils.passives import compute_passive_params
+
 
 # ── helper – extract numeric cell‑ID from image filename (e.g. cell_7.webp) ──
 _ID_RE = re.compile(r"cell[_\-]?(\d+)", re.IGNORECASE)
@@ -88,7 +90,7 @@ class AnalysisPage(QtWidgets.QWidget):
 
         # connections -----------------------------------------------------
         self.btn_back.clicked.connect(self.back_requested)
-        self.btn_analyze.clicked.connect(lambda: self.analyze_requested.emit(self.meta_df))
+        self.btn_analyze.clicked.connect(self._on_analyze)
         self.btn_continue.clicked.connect(self.continue_requested)
         self.chk_show_cmd.toggled.connect(self.plot_cmd.setVisible)
 
@@ -99,7 +101,9 @@ class AnalysisPage(QtWidgets.QWidget):
         self.table.selectionModel().selectionChanged.connect(self._on_row_selected)
 
     # ---------------------------------------------------- populate table --
-    _COLS = ["indices", "src_dir", "group_label"]
+    _COLS = ["indices", "src_dir", "group_label",
+            "Ra (MΩ)", "Rm (MΩ)", "Cm (pF)"]
+
 
     def _populate_table(self):
         self.table.setColumnCount(len(self._COLS))
@@ -111,6 +115,9 @@ class AnalysisPage(QtWidgets.QWidget):
                 "indices": ", ".join(map(str, cell["cell_ids"])),
                 "src_dir": cell["src_dir"].name,
                 "group_label": cell["group_label"],
+                "Ra (MΩ)": "",
+                "Rm (MΩ)": "",
+                "Cm (pF)": "",
             }
             for c, col in enumerate(self._COLS):
                 item = QtWidgets.QTableWidgetItem(vals[col])
@@ -189,3 +196,70 @@ class AnalysisPage(QtWidgets.QWidget):
                 if (c1, c2) == pair and c1.isVisible():
                     for cv in (c1, c2):
                         cv
+
+    # ─────────────────────────────────────────────────────────── analysis slot
+    def _on_analyze(self):
+        """
+        Loop over every cell, run passive‑parameter extraction for every trace,
+        take the mean, and fill the table.  Recomputes each time.
+        """
+        total = len(self._cells)
+        dlg = QtWidgets.QProgressDialog("Analyzing passive parameters…",
+                                        None, 0, total, self)
+        dlg.setWindowTitle("Please wait")
+        dlg.setWindowModality(QtCore.Qt.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.show()
+
+        for row_idx, cell in enumerate(self._cells):
+            dlg.setLabelText(f"Cell {row_idx + 1} / {total}")
+            QtWidgets.QApplication.processEvents()
+
+            traces = load_voltage_traces_for_indices(cell["src_dir"],
+                                                    cell["cell_ids"])
+            ra, rm, cm = self._analyze_cell(traces)
+
+            # cache for possible later use
+            cell["Ra"] = ra
+            cell["Rm"] = rm
+            cell["Cm"] = cm
+
+            self._update_table_row(row_idx, ra, rm, cm)
+
+            dlg.setValue(row_idx + 1)
+            if dlg.wasCanceled():
+                break
+        dlg.close()
+
+        # keep the original outward signal so nothing else breaks
+        self.analyze_requested.emit(self.meta_df)
+
+    # -------------------------------------------------------------------------
+    def _analyze_cell(self, traces: dict):
+        """Return mean Ra, Rm, Cm for one cell (None if all fits fail)."""
+        ra_list, rm_list, cm_list = [], [], []
+        for t, cmd, rsp in traces.values():
+            out = compute_passive_params(t, cmd, rsp, step_mV=10.0)
+            if all(val is not None for val in out):
+                ra_list.append(out[0])
+                rm_list.append(out[1])
+                cm_list.append(out[2])
+
+        if not ra_list:          # no successful fits
+            return None, None, None
+
+        import numpy as np
+        return float(np.mean(ra_list)), float(np.mean(rm_list)), float(np.mean(cm_list))
+
+    # -------------------------------------------------------------------------
+    def _update_table_row(self, row: int, ra, rm, cm):
+        """Put formatted values into the passive‑parameter columns."""
+        def _fmt(v):   # show en dash if None
+            return f"{v:.1f}" if v is not None else "–"
+
+        base_col = self._COLS.index("Ra (MΩ)")
+        for offset, val in enumerate((_fmt(ra), _fmt(rm), _fmt(cm))):
+            item = QtWidgets.QTableWidgetItem(val)
+            item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
+            self.table.setItem(row, base_col + offset, item)
+
