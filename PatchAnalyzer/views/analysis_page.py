@@ -71,27 +71,34 @@ class AnalysisPage(QtWidgets.QWidget):
 
         # bottom button bar --------------------------------------------
         bar = QtWidgets.QHBoxLayout()
+        self.btn_save_csv = QtWidgets.QPushButton("Save Full CSV…")
+        bar.addWidget(self.btn_save_csv)
+        self.btn_save_csv.clicked.connect(self._save_full_csv)   # NEW
+
+
+        self.btn_analyze = QtWidgets.QPushButton("Analyze ▶")
+        bar.addWidget(self.btn_analyze)
+        self.btn_analyze.clicked.connect(self._on_analyze)
         bar.addStretch(1)
+
         self.chk_show_cmd = QtWidgets.QCheckBox("Show Command")
         self.chk_show_cmd.setChecked(True)
         bar.addWidget(self.chk_show_cmd)
 
         self.btn_back = QtWidgets.QPushButton("← Back")
-        self.btn_analyze = QtWidgets.QPushButton("Analyze ▶")
-        self.btn_continue = QtWidgets.QPushButton("Continue ▶")
-
         bar.addWidget(self.btn_back)
-        bar.addWidget(self.btn_analyze)
+        self.btn_back.clicked.connect(self.back_requested)
+
+
+
+        self.btn_continue = QtWidgets.QPushButton("Continue ▶")
         bar.addWidget(self.btn_continue)
+        self.btn_continue.clicked.connect(self.continue_requested)
 
         root = QtWidgets.QVBoxLayout(self)
         root.addWidget(splitter, 1)
         root.addLayout(bar)
 
-        # connections -----------------------------------------------------
-        self.btn_back.clicked.connect(self.back_requested)
-        self.btn_analyze.clicked.connect(self._on_analyze)
-        self.btn_continue.clicked.connect(self.continue_requested)
         self.chk_show_cmd.toggled.connect(self.plot_cmd.setVisible)
 
         self._curve_pairs: list[tuple[pg.PlotDataItem, pg.PlotDataItem]] = []  # (cmd, rsp)
@@ -263,3 +270,44 @@ class AnalysisPage(QtWidgets.QWidget):
             item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, base_col + offset, item)
 
+    # ─────────────────────────────────────────────── CSV export
+    def _save_full_csv(self):
+        """
+        Build a DataFrame that contains one row per *cell* with all metadata
+        + passive parameters, then let the user save it as a CSV.
+        """
+        # Assemble a list of dictionaries – one per cell
+        rows = []
+        for cell in self._cells:
+            rows.append({
+                "indices"   : ", ".join(map(str, cell["cell_ids"])),
+                "stage_x"   : cell["coord"][0],
+                "stage_y"   : cell["coord"][1],
+                "stage_z"   : cell["coord"][2],
+                "src_dir"   : cell["src_dir"].name,
+                "group_label": cell["group_label"],
+                "Ra_MOhm"   : cell.get("Ra"),
+                "Rm_MOhm"   : cell.get("Rm"),
+                "Cm_pF"     : cell.get("Cm"),
+            })
+
+        df_export = pd.DataFrame(rows)
+
+        # Ask for destination
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Analysis as CSV", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            df_export.to_csv(path, index=False)
+            QtWidgets.QMessageBox.information(
+                self, "Saved",
+                f"Analysis table successfully saved to:\n{path}"
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Error",
+                f"Could not save CSV:\n{exc}"
+            )
