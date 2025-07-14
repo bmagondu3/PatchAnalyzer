@@ -139,3 +139,83 @@ def compute_passive_params(time_s: np.ndarray,
         return _calc_params(tau, step_mV, I_pk, I_pre, I_ss)
     except Exception:
         return None, None, None
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Current‑clamp (“CC”) passive parameters
+#  Logic ported from   ephys_core.calc_pas_params_one_sweep
+#  Units:  time [s] • command [pA] • response [mV]
+# ─────────────────────────────────────────────────────────────────────────────
+import numpy as _np
+import scipy.optimize as _opt
+
+def compute_cc_passive_params(time_s:  _np.ndarray,
+                              cmd_pA:  _np.ndarray,
+                              rsp_mV:  _np.ndarray,
+                              I_hold_from_MT: float = 0.0,
+):
+    """
+    Return a *dict* with 
+        membrane_tau_ms, input_resistance_MOhm, membrane_capacitance_pF,
+        resting_potential_mV, holding_current_pA
+
+    Parameters
+    ----------
+    time_s : 1‑D array, seconds
+    cmd_pA : injected current, pA (positive = depolarising)
+    rsp_mV : membrane voltage, mV
+    I_hold_from_MT : optional DC holding current measured in a MemTest
+
+    Failure → all fields set to *None*.
+    """
+    try:
+        dt = float(1.0 / (len(time_s) / (time_s[-1] - time_s[0])))
+
+        # locate first negative‑going edge in command
+        starts = _np.where(_np.diff(cmd_pA) < 0)[0]
+        ends   = _np.where(_np.diff(cmd_pA) > 0)[0]
+        if len(starts) == 0 or len(ends) == 0:
+            raise RuntimeError("No current step detected")
+
+        p_start, p_end = int(starts[0]), int(ends[0])
+
+        V1 = float(_np.mean(rsp_mV[:p_start - 1]))
+        V2 = float(_np.mean(rsp_mV[int(p_start + 0.1/dt): p_end]))
+
+        I_hold = float(_np.mean(cmd_pA[:p_start - 10]))
+        I_step = float(_np.mean(cmd_pA[p_start + 10: p_start + 110]) - I_hold)
+
+        input_R = abs((V1 - V2) / I_step)      # MΩ (mV/pA  ==  MΩ)
+        resting = V1 - (input_R * I_hold_from_MT)
+
+        # fit mono‑exp over first 100 ms
+        X = time_s[p_start : int(p_start + 0.1/dt)]
+        Y = rsp_mV[p_start : int(p_start + 0.1/dt)]
+
+        def _exp(x, m, t, b):
+            return m * _np.exp(-t * x) + b
+
+        m, t, b = _opt.curve_fit(
+            _exp, X[::25], Y[::25],
+            p0=(20.0, 10.0, rsp_mV[p_end]),
+            maxfev=100_000
+        )[0]
+
+        tau_ms = (1 / t) * 1e3                       # ms
+        Cm_pF  = (tau_ms / input_R)                  # pF   (ms / MΩ)
+
+        return dict(
+            membrane_tau_ms          = tau_ms,
+            input_resistance_MOhm    = input_R,
+            membrane_capacitance_pF  = Cm_pF,
+            resting_potential_mV     = resting,
+            holding_current_pA       = I_hold
+        )
+    except Exception:
+        # any failure → return keys with None to keep GUI tolerant
+        return dict(
+            membrane_tau_ms          = None,
+            input_resistance_MOhm    = None,
+            membrane_capacitance_pF  = None,
+            resting_potential_mV     = None,
+            holding_current_pA       = None
+        )
