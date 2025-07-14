@@ -144,6 +144,7 @@ class AnalysisPage(QtWidgets.QWidget):
             self._on_row_selected()
 
     # -------------------------------------------------- row selection ----
+
     def _on_row_selected(self, *_):
         sel = self.table.selectionModel().selectedRows()
         if not sel:
@@ -157,17 +158,25 @@ class AnalysisPage(QtWidgets.QWidget):
         self._curve_pairs.clear()
         self._selected_pair = None
 
+        # NEW: mapping response→command & ensure selected‑curve attr exists
+        self._resp2cmd: dict[pg.PlotDataItem, pg.PlotDataItem] = {}
+        self._selected_curve: pg.PlotDataItem | None = None
+
         traces = load_voltage_traces_for_indices(cell["src_dir"], cell["cell_ids"])
         if not traces:
             self.plot_rsp.addItem(pg.TextItem(html="<span style='color:red'>No traces found</span>"))
             return
 
+        from functools import partial   # avoid late‑binding lambda issue
+
         for fname, (t, cmd, rsp) in traces.items():
             pen = pg.mkPen("red", width=1)
             curve_cmd = self.plot_cmd.plot(t, cmd, pen=pen, clickable=True)
             curve_rsp = self.plot_rsp.plot(t, rsp, pen=pen, clickable=True, name=fname)
-            curve_rsp.sigClicked.connect(lambda _, c1=curve_cmd, c2=curve_rsp: self._on_pair_clicked(c1, c2))
-            curve_cmd.sigClicked.connect(lambda _, c1=curve_cmd, c2=curve_rsp: self._on_pair_clicked(c1, c2))
+
+            # connect clicks – pass ONLY the response curve; event arg ignored
+            curve_rsp.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
+            curve_cmd.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
 
             # legend toggle visibility -----------------------------------
             label_item = self.legend.items[-1][1]
@@ -182,27 +191,39 @@ class AnalysisPage(QtWidgets.QWidget):
             label_item.mousePressEvent = _make_toggle()
 
             self._curve_pairs.append((curve_cmd, curve_rsp))
+            self._resp2cmd[curve_rsp] = curve_cmd        # populate mapping
 
         self.plot_cmd.setVisible(self.chk_show_cmd.isChecked())
         self.plot_cmd.enableAutoRange()
         self.plot_rsp.enableAutoRange()
 
-    # ------------------------------------------------- curve pair click ---
-    def _on_pair_clicked(self, cmd_curve: pg.PlotDataItem, rsp_curve: pg.PlotDataItem):
-        pair = (cmd_curve, rsp_curve)
-        if self._selected_pair == pair:
-            self._selected_pair = None
-            for c1, c2 in self._curve_pairs:
-                if c1.isVisible():
-                    for cv in (c1, c2):
-                        cv.setOpacity(1.0)
-                        cv.setPen("red", width=1)
-        else:
-            self._selected_pair = pair
-            for c1, c2 in self._curve_pairs:
-                if (c1, c2) == pair and c1.isVisible():
-                    for cv in (c1, c2):
-                        cv
+
+    # ------------------------------------------------ response click ------
+    def _on_response_clicked(self, rsp_curve: pg.PlotDataItem, _event=None):
+        """
+        Highlight the sweep whose *response* curve was clicked.
+        """
+        cmd_curve = self._resp2cmd[rsp_curve]
+
+        # toggle selection
+        self._selected_curve = rsp_curve if self._selected_curve is not rsp_curve else None
+
+        for r_curve, c_curve in self._resp2cmd.items():
+            visible = r_curve.isVisible() or c_curve.isVisible()
+            selected = (r_curve is self._selected_curve) and visible
+
+            if selected:
+                opacity, width = 1.0, 3
+            elif visible:
+                opacity, width = 0.25, 1
+            else:                     # hidden via legend
+                opacity, width = 0.05, 1
+
+            for cv in (r_curve, c_curve):
+                cv.setOpacity(opacity)
+                cv.setPen("red", width=width)
+
+
 
     # ─────────────────────────────────────────────────────────── analysis slot
     def _on_analyze(self):
