@@ -47,16 +47,18 @@ def load_voltage_traces_for_indices(
 
     return traces
 
-# ── Current‑clamp loader – nested {cell_idx ▶ current_pA ▶ trace} ──────────
+# ── Current-clamp loader – nested {cell_id ▶ current_pA ▶ trace} ─────────
 import re as _re
-from pathlib import Path
 import numpy as _np
+from pathlib import Path
 
-# Pattern:  CurrentProtocol_<cell>_<hex‑colour>_<current>.csv
-#          └─── group(1) ───────┘           └── group(2) ─┘
+# Pattern:  CurrentProtocol_<cell>_<hex-colour>_<current>.csv
 _REGEX = _re.compile(
     r"CurrentProtocol_(\d+)_#[0-9A-Fa-f]{6}_([+-]?\d+(?:\.\d+)?)\.csv$"
 )
+
+# *** NEW: convert V → pA  (400 pA / V) ***
+C_CLAMP_PAPERV = 400.0           # pico-amps per Volt
 
 def load_current_traces(
     src_dir:      Path,
@@ -85,14 +87,13 @@ def load_current_traces(
         if not m:
             continue
 
-        cell_id   = int(m.group(1))
-        if cell_id not in wanted:       # skip other cells
+        cell_id = int(m.group(1))
+        if cell_id not in wanted:
             continue
 
         current_pA = float(m.group(2))
-        t, cmd, rsp = _read_csv(csv_path)   # (N,) arrays
-
+        t, cmd, rsp = _read_csv(csv_path)
+        cmd *= C_CLAMP_PAPERV            # <<< 400× scaling to pA
         traces[cell_id][current_pA] = (t, cmd, rsp)
 
-    # drop cell_ids that ended up with no traces
-    return {cid: curdict for cid, curdict in traces.items() if curdict}
+    return {cid: d for cid, d in traces.items() if d}
