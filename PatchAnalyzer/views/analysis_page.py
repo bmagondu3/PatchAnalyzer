@@ -8,8 +8,28 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ..models.ephys_loader import load_voltage_traces_for_indices
-from ..utils.passives import compute_passive_params
+from ..utils.ephys_analyzer import VprotAnalyzer      # NEW import
 
+
+
+# ── NEW single source-of-truth for columns ─────────────
+_COL_IDS = [
+    "unique_id", "indices", "src_dir", "group_label",        # ← src_dir added
+    "mean_ra", "sd_ra", "mean_rm", "sd_rm", "mean_cm", "sd_cm",
+    "ra_list", "rm_list", "cm_list",
+    "has_vprot",
+]
+
+_COL_HEADERS = [
+    "UID", "Indices", "Source Dir", "Group Label",           # ← header added
+    "Mean Ra (MΩ)", "SD Ra (MΩ)",
+    "Mean Rm (MΩ)", "SD Rm (MΩ)",
+    "Mean Cm (pF)", "SD Cm (pF)",
+    "Ra list (MΩ)", "Rm list (MΩ)", "Cm list (pF)",
+    "Has Vprot",
+]
+
+# ───────────────────────────────────────────────────────
 
 # ── helper – extract numeric cell‑ID from image filename (e.g. cell_7.webp) ──
 _ID_RE = re.compile(r"cell[_\-]?(\d+)", re.IGNORECASE)
@@ -31,16 +51,23 @@ class AnalysisPage(QtWidgets.QWidget):
     def __init__(self, meta_df: pd.DataFrame, parent=None):
         super().__init__(parent)
         self.meta_df = meta_df.reset_index(drop=True)
-
+        self._vprot = VprotAnalyzer(step_mV=10.0)
         # ── aggregate identical coordinates → list[cell_ids] ──────────────
+        # enumerate → give every cell a persistent UID
         self._cells: list[dict] = []
-        for coord, sub in self.meta_df.groupby(["stage_x", "stage_y", "stage_z"]):
+        for uid, (coord, sub) in enumerate(
+                self.meta_df.groupby(["stage_x", "stage_y", "stage_z"]), start=1):
             cell_ids = [_cell_id(img) for img in sub["image"] if _cell_id(img) is not None]
-            self._cells.append(
-                dict(coord=coord,
-                     src_dir=Path(sub["src_dir"].iloc[0]),
-                     group_label=sub["group_label"].iloc[0],
-                     cell_ids=sorted(cell_ids)))
+            self._cells.append(dict(
+                unique_id = uid,
+                coord     = coord,
+                src_dir   = Path(sub["src_dir"].iloc[0]),
+                group_label = sub["group_label"].iloc[0],
+                cell_ids  = sorted(cell_ids),
+    ))
+        # ── add near other instance attrs in __init__
+        self._param_label: pg.TextItem | None = None
+        self._param_conn  = None               # <— NEW
 
         # ── widgets ------------------------------------------------------
         self.table = QtWidgets.QTableWidget(
@@ -53,14 +80,17 @@ class AnalysisPage(QtWidgets.QWidget):
         right_box = QtWidgets.QWidget()
         right_lay = QtWidgets.QVBoxLayout(right_box)
         right_lay.setContentsMargins(0, 0, 0, 0)
-        right_lay.setSpacing(0)
+        right_lay.setSpacing(8)
 
         self.plot_cmd = pg.PlotWidget(background="w")
         self.plot_cmd.setMaximumHeight(180)
-        self.plot_cmd.getPlotItem().hideAxis('bottom')      # share x‑axis with lower plot
+        self.plot_cmd.setLabel('left',   'Command (mV)')
+        self.plot_cmd.setLabel('bottom', 'Time (ms)')
         right_lay.addWidget(self.plot_cmd, 1)
 
         self.plot_rsp = pg.PlotWidget(background="w")
+        self.plot_rsp.setLabel('left',   'Response (pA)')
+        self.plot_rsp.setLabel('bottom', 'Time (ms)')
         self.legend = self.plot_rsp.addLegend(offset=(-110, 30))
         right_lay.addWidget(self.plot_rsp, 2)
 
@@ -108,33 +138,36 @@ class AnalysisPage(QtWidgets.QWidget):
         self.table.selectionModel().selectionChanged.connect(self._on_row_selected)
 
     # ---------------------------------------------------- populate table --
-    _COLS = ["indices", "src_dir", "group_label",
-            "Ra (MΩ)", "Rm (MΩ)", "Cm (pF)"]
-
 
     def _populate_table(self):
-        self.table.setColumnCount(len(self._COLS))
-        self.table.setHorizontalHeaderLabels([c.replace("_", " ").title() for c in self._COLS])
+        self.table.setColumnCount(len(_COL_IDS))
+        self.table.setHorizontalHeaderLabels(_COL_HEADERS)
         self.table.setRowCount(len(self._cells))
+        # Map id → column index for quick use elsewhere
+        self._col_idx = {cid: i for i, cid in enumerate(_COL_IDS)}
 
         for r, cell in enumerate(self._cells):
-            vals = {
-                "indices": ", ".join(map(str, cell["cell_ids"])),
-                "src_dir": cell["src_dir"].name,
+            init_vals = {
+                "unique_id"  : str(cell["unique_id"]),
+                "indices"    : ", ".join(map(str, cell["cell_ids"])),
+                "src_dir"    : cell["src_dir"].name,          # NEW
                 "group_label": cell["group_label"],
-                "Ra (MΩ)": "",
-                "Rm (MΩ)": "",
-                "Cm (pF)": "",
+                # empty placeholders – filled after analysis
+                "mean_ra": "", "sd_ra": "", "mean_rm": "", "sd_rm": "",
+                "mean_cm": "", "sd_cm": "",
+                "ra_list": "", "rm_list": "", "cm_list": "",
+                "has_vprot": "",
             }
-            for c, col in enumerate(self._COLS):
-                item = QtWidgets.QTableWidgetItem(vals[col])
+
+            for cid, text in init_vals.items():
+                item = QtWidgets.QTableWidgetItem(text)
                 item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
-                if col == "group_label" and vals[col]:
-                    hue = int(hashlib.md5(vals[col].encode()).hexdigest(), 16) % 360
+                if cid == "group_label" and text:
+                    hue = int(hashlib.md5(text.encode()).hexdigest(), 16) % 360
                     item.setBackground(QtGui.QColor.fromHsl(hue, 160, 200))
                     item.setForeground(QtGui.QColor("black"))
                     item.setTextAlignment(QtCore.Qt.AlignCenter)
-                self.table.setItem(r, c, item)
+                self.table.setItem(r, self._col_idx[cid], item)
 
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSortingEnabled(True)
@@ -144,6 +177,30 @@ class AnalysisPage(QtWidgets.QWidget):
             self._on_row_selected()
 
     # -------------------------------------------------- row selection ----
+    # ─────────────────────────────────────────────────────────── parameter label
+    def _show_param_label(self, cell: dict):
+        """Draw ‘Ra Rm Cm’ legend once per row-selection – no live callbacks."""
+        # remove previous label
+        if getattr(self, "_param_label", None):
+            self.plot_rsp.removeItem(self._param_label)
+        self._param_label = None
+
+        # analysis not run → nothing to show
+        if not all(k in cell for k in ("mean_ra", "mean_rm", "mean_cm")):
+            return
+
+        txt = (f"Ra: {cell['mean_ra']} MΩ    "
+            f"Rm: {cell['mean_rm']} MΩ    "
+            f"Cm: {cell['mean_cm']} pF")
+
+        lbl = pg.TextItem(txt, anchor=(0, 1), color=(0, 0, 0))
+        self.plot_rsp.addItem(lbl)
+        self._param_label = lbl
+
+        # position once (3 % inset from bottom-left corner)
+        (xmin, xmax), (ymin, ymax) = self.plot_rsp.viewRange()
+        lbl.setPos(xmin + 0.03 * (xmax - xmin),
+                ymin + 0.03 * (ymax - ymin))
 
     def _on_row_selected(self, *_):
         sel = self.table.selectionModel().selectedRows()
@@ -170,9 +227,14 @@ class AnalysisPage(QtWidgets.QWidget):
         from functools import partial   # avoid late‑binding lambda issue
 
         for fname, (t, cmd, rsp) in traces.items():
+            t_ms   = t * 1e3        # s → ms
+            cmd_mV = cmd * 1e3      # V → mV
+            rsp_pA = rsp * 1e12     # A → pA
+
             pen = pg.mkPen("red", width=1)
-            curve_cmd = self.plot_cmd.plot(t, cmd, pen=pen, clickable=True)
-            curve_rsp = self.plot_rsp.plot(t, rsp, pen=pen, clickable=True, name=fname)
+            curve_cmd = self.plot_cmd.plot(t_ms, cmd_mV, pen=pen, clickable=True)
+            curve_rsp = self.plot_rsp.plot(t_ms, rsp_pA, pen=pen, clickable=True,name=fname)
+
 
             # connect clicks – pass ONLY the response curve; event arg ignored
             curve_rsp.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
@@ -196,6 +258,8 @@ class AnalysisPage(QtWidgets.QWidget):
         self.plot_cmd.setVisible(self.chk_show_cmd.isChecked())
         self.plot_cmd.enableAutoRange()
         self.plot_rsp.enableAutoRange()
+            # -------- show Ra / Rm / Cm text -----------
+        self._show_param_label(cell)
 
 
     # ------------------------------------------------ response click ------
@@ -243,92 +307,102 @@ class AnalysisPage(QtWidgets.QWidget):
             dlg.setLabelText(f"Cell {row_idx + 1} / {total}")
             QtWidgets.QApplication.processEvents()
 
-            traces = load_voltage_traces_for_indices(cell["src_dir"],
-                                                    cell["cell_ids"])
-            ra, rm, cm = self._analyze_cell(traces)
+            traces = load_voltage_traces_for_indices(
+                cell["src_dir"], cell["cell_ids"])
 
-            # cache for possible later use
-            cell["Ra"] = ra
-            cell["Rm"] = rm
-            cell["Cm"] = cm
+            stats = self._analyze_cell(traces)
 
-            self._update_table_row(row_idx, ra, rm, cm)
+            # keep for CSV export
+            cell.update(stats)
+
+            self._update_table_row(row_idx, stats)
 
             dlg.setValue(row_idx + 1)
             if dlg.wasCanceled():
                 break
         dlg.close()
 
+                # refresh the currently-selected row’s plots / stats  ← NEW
+        if self.table.currentRow() >= 0:
+            self._on_row_selected()
+
+
         # keep the original outward signal so nothing else breaks
         self.analyze_requested.emit(self.meta_df)
 
     # -------------------------------------------------------------------------
     def _analyze_cell(self, traces: dict):
-        """Return mean Ra, Rm, Cm for one cell (None if all fits fail)."""
-        ra_list, rm_list, cm_list = [], [], []
-        for t, cmd, rsp in traces.values():
-            out = compute_passive_params(t, cmd, rsp, step_mV=10.0)
-            if all(val is not None for val in out):
-                ra_list.append(out[0])
-                rm_list.append(out[1])
-                cm_list.append(out[2])
+        """
+        Return a dict with all stats for one cell.
+        Keys match _COL_IDS; values are str-ready.
+        """
+        stats = {cid: "–" for cid in (
+            "mean_ra", "sd_ra", "mean_rm", "sd_rm", "mean_cm", "sd_cm",
+            "ra_list", "rm_list", "cm_list")}
+        stats["has_vprot"] = "✓" if traces else "–"
 
-        if not ra_list:          # no successful fits
-            return None, None, None
+        if not traces:
+            return stats          # nothing to fit
+
+        (means, fits) = self._vprot.fit_cell(
+            traces, aggregate="mean", return_all=True)
+
+        ok = [f for f in fits if all(v is not None for v in f)]
+        if not ok:
+            return stats          # all fits failed
 
         import numpy as np
-        return float(np.mean(ra_list)), float(np.mean(rm_list)), float(np.mean(cm_list))
+        ra, rm, cm = zip(*ok)
+        def _fmt(v): return f"{v:.1f}"
+        def _sd(lst): return np.std(lst, ddof=1) if len(lst) > 1 else 0.0
+
+        stats.update(
+            mean_ra = _fmt(np.mean(ra)),  sd_ra = _fmt(_sd(ra)),
+            mean_rm = _fmt(np.mean(rm)),  sd_rm = _fmt(_sd(rm)),
+            mean_cm = _fmt(np.mean(cm)),  sd_cm = _fmt(_sd(cm)),
+            ra_list = ", ".join(_fmt(v) for v in ra),
+            rm_list = ", ".join(_fmt(v) for v in rm),
+            cm_list = ", ".join(_fmt(v) for v in cm),
+        )
+        return stats
+
 
     # -------------------------------------------------------------------------
-    def _update_table_row(self, row: int, ra, rm, cm):
-        """Put formatted values into the passive‑parameter columns."""
-        def _fmt(v):   # show en dash if None
-            return f"{v:.1f}" if v is not None else "–"
-
-        base_col = self._COLS.index("Ra (MΩ)")
-        for offset, val in enumerate((_fmt(ra), _fmt(rm), _fmt(cm))):
+    def _update_table_row(self, row: int, stats: dict):
+        for cid, val in stats.items():
+            if cid not in self._col_idx:
+                continue
             item = QtWidgets.QTableWidgetItem(val)
             item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
-            self.table.setItem(row, base_col + offset, item)
+            self.table.setItem(row, self._col_idx[cid], item)
+
 
     # ─────────────────────────────────────────────── CSV export
     def _save_full_csv(self):
-        """
-        Build a DataFrame that contains one row per *cell* with all metadata
-        + passive parameters, then let the user save it as a CSV.
-        """
-        # Assemble a list of dictionaries – one per cell
         rows = []
         for cell in self._cells:
             rows.append({
-                "indices"   : ", ".join(map(str, cell["cell_ids"])),
-                "stage_x"   : cell["coord"][0],
-                "stage_y"   : cell["coord"][1],
-                "stage_z"   : cell["coord"][2],
-                "src_dir"   : cell["src_dir"].name,
+                "UID"        : cell["unique_id"],
+                "indices"    : ", ".join(map(str, cell["cell_ids"])),
+                "stage_x"    : cell["coord"][0],
+                "stage_y"    : cell["coord"][1],
+                "stage_z"    : cell["coord"][2],
+                "src_dir"    : cell["src_dir"].name,
                 "group_label": cell["group_label"],
-                "Ra_MOhm"   : cell.get("Ra"),
-                "Rm_MOhm"   : cell.get("Rm"),
-                "Cm_pF"     : cell.get("Cm"),
+                "mean_Ra_MOhm": cell.get("mean_ra", "–"),
+                "SD_Ra_MOhm"  : cell.get("sd_ra", "–"),
+                "mean_Rm_MOhm": cell.get("mean_rm", "–"),
+                "SD_Rm_MOhm"  : cell.get("sd_rm", "–"),
+                "mean_Cm_pF"  : cell.get("mean_cm", "–"),
+                "SD_Cm_pF"    : cell.get("sd_cm", "–"),
+                "Ra_list_MOhm": cell.get("ra_list", ""),
+                "Rm_list_MOhm": cell.get("rm_list", ""),
+                "Cm_list_pF"  : cell.get("cm_list", ""),
+                "has_Vprot"   : cell.get("has_vprot", "–"),
             })
+        pd.DataFrame(rows).to_csv(
+            QtWidgets.QFileDialog.getSaveFileName(
+                self, "Save Analysis as CSV", "",
+                "CSV Files (*.csv);;All Files (*)")[0],
+            index=False)
 
-        df_export = pd.DataFrame(rows)
-
-        # Ask for destination
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Analysis as CSV", "", "CSV Files (*.csv);;All Files (*)"
-        )
-        if not path:
-            return
-
-        try:
-            df_export.to_csv(path, index=False)
-            QtWidgets.QMessageBox.information(
-                self, "Saved",
-                f"Analysis table successfully saved to:\n{path}"
-            )
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(
-                self, "Error",
-                f"Could not save CSV:\n{exc}"
-            )
