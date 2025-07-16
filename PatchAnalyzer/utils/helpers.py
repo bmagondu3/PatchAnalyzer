@@ -33,3 +33,47 @@ def find_voltage_image(folder: Path, cell_image_name: str) -> Path | None:
         if f.is_file() and f.name.lower() == target:
             return f
     return None
+
+def find_current_image(folder: Path, cell_image_name: str) -> Path | None:
+    """
+    Locate CurrentProtocol_<id>_<colour>.png (case-insensitive) in *folder*/CurrentProtocol.
+
+    Only that exact pattern is accepted — no extra suffixes.
+    """
+    m = _CELL_RE.search(cell_image_name)
+    if not m:
+        return None
+    cell_id = m.group(1)
+
+    cp_dir = folder / "CurrentProtocol"
+    if not cp_dir.exists():
+        return None
+
+    # Case-insensitive exact filename match
+    target = f"currentprotocol_{cell_id}_*.png"
+    for f in cp_dir.glob("*.png"):
+        if f.is_file() and f.name.lower().startswith(target.lower()):
+            return f
+    return None
+
+def find_holding_image(folder: Path, cell_image_name: str) -> Path | None:
+    """
+    Locate HoldingProtocol_<id>.png (case-insensitive) in *folder*/HoldingProtocol.
+
+    Only that exact pattern is accepted — no extra suffixes.
+    """
+    m = _CELL_RE.search(cell_image_name)
+    if not m:
+        return None
+    cell_id = m.group(1)
+
+    hp_dir = folder / "HoldingProtocol"
+    if not hp_dir.exists():
+        return None
+
+    # Case-insensitive exact filename match
+    target = f"holdingprotocol_{cell_id}.png"
+    for f in hp_dir.iterdir():
+        if f.is_file() and f.name.lower() == target:
+            return f
+    return None
