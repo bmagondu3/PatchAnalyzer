@@ -1,4 +1,4 @@
-# PatchAnalyzer/views/main_page.py
+# PatchAnalyzer/views/map_page.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,11 +12,11 @@ from ..utils.log import setup_logger
 logger = setup_logger(__name__)
 
 
-class MainPage(QtWidgets.QWidget):
-    """Three always-square panes + fixed-height button bar (no grey gaps)."""
+class MapPage(QtWidgets.QWidget):
+    """Final page – scatter ‘map’ of cells."""
 
-    group_requested = QtCore.pyqtSignal(pd.DataFrame)
-    back_requested  = QtCore.pyqtSignal()
+    back_requested = QtCore.pyqtSignal()
+    # no forward signal – this is the end of the flow
 
     # ------------------------------------------------------------------ init
     def __init__(self, meta_df: pd.DataFrame, parent=None):
@@ -63,11 +63,9 @@ class MainPage(QtWidgets.QWidget):
         self.label_cell = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
         top.addWidget(square_frame(self.label_cell))
 
-        # voltage
-        self.label_voltage = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
-        top.addWidget(square_frame(self.label_voltage))
-
-        # top.addStretch(1)   # tiny residual width goes to the right edge
+        # # voltage
+        # self.label_voltage = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
+        # top.addWidget(square_frame(self.label_voltage))
 
         # ── BOTTOM : fixed-height button bar ───────────────────────────
         self._btn_bar = QtWidgets.QWidget()
@@ -77,19 +75,14 @@ class MainPage(QtWidgets.QWidget):
 
         bar_lay.addStretch(1)
 
-        
         self.btn_back = QtWidgets.QPushButton("← Back")
         bar_lay.addWidget(self.btn_back)
-
-        self.btn_group = QtWidgets.QPushButton("Group Cells ▶")
-        bar_lay.addWidget(self.btn_group)
 
         # lock bar height to its sizeHint so it never stretches
         self._btn_bar.setFixedHeight(self._btn_bar.sizeHint().height())
         root.addWidget(self._btn_bar)
 
-        # wire-up buttons
-        self.btn_group.clicked.connect(self._on_group_clicked)
+        # wire-up button
         self.btn_back.clicked.connect(self.back_requested.emit)
 
     # ---------------------------------------------------------------- scatter
@@ -107,7 +100,7 @@ class MainPage(QtWidgets.QWidget):
         self.plot.addItem(self.scatter)
 
         self.label_cell.setText("Select a cell")
-        self.label_voltage.setText("Select a cell")
+        # self.label_voltage.setText("Select a cell")
 
     # ---------------------------------------------------------------- resize
     def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
@@ -129,8 +122,8 @@ class MainPage(QtWidgets.QWidget):
 
         self._show(self.label_cell,
                    Path(row["src_dir"]) / "CellMetadata" / row["image"])
-        self._show(self.label_voltage,
-                   find_voltage_image(Path(row["src_dir"]), row["image"]))
+        # self._show(self.label_voltage,
+        #            find_voltage_image(Path(row["src_dir"]), row["image"]))
 
         for p in self.scatter.points():
             p.resetPen()
@@ -145,6 +138,3 @@ class MainPage(QtWidgets.QWidget):
                 QtCore.Qt.SmoothTransformation))
         else:
             lbl.setText("No image")
-
-    def _on_group_clicked(self):
-        self.group_requested.emit(self.meta_df)
