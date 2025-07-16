@@ -145,86 +145,92 @@ def compute_passive_params(time_s: np.ndarray,
 #  Logic ported from   ephys_core.calc_pas_params_one_sweep
 #  Units:  time [s] • command [pA] • response [mV]
 # ─────────────────────────────────────────────────────────────────────────────
-import numpy as _np
-import scipy.optimize as _opt
+# ── add these two helpers somewhere near the top of passives.py ─────────
+def _find_test_pulse(cmd: np.ndarray, edge_frac=0.05, min_pts=5):
+    """Amplitude-based detection of the *first* –20 pA test pulse."""
+    n_bl = max(1, int(0.05 * cmd.size))
+    baseline = np.median(cmd[:n_bl])
+    mad = np.median(np.abs(cmd[:n_bl] - baseline))
+    sigma = 1.4826 * mad if mad else np.std(cmd[:n_bl])
+    thr = max(1e-3, sigma * edge_frac * 100)            # adaptive
+    mask = np.abs(cmd - baseline) > thr
+    idxs = np.where(mask)[0]
+    if idxs.size == 0:
+        return None, None
+    runs = np.split(idxs, np.where(np.diff(idxs) > 1)[0] + 1)
+    runs = [r for r in runs if len(r) >= min_pts]
+    return (int(runs[0][0]), int(runs[0][-1])) if runs else (None, None)
 
-# ─────────────────────────────────────────────────────────── CC  passives
-def compute_cc_passive_params(time_s:  _np.ndarray,
-                              cmd_pA:  _np.ndarray,
-                              rsp_mV:  _np.ndarray,
-                              I_hold_from_MT: float = 0.0,
-):
-    """
-    Extract passive parameters from **the FIRST current step** in *cmd_pA*.
-    This step is the –20 pA “test pulse” used for Rin / τ, which always
-    precedes the larger stimulus pulses in your protocol.
 
-    The step is found by:
-    1.  dCmd/dt  →  locate large negative edges   (step start)
-    2.  dCmd/dt  →  locate large positive edges   (step end)
-    3.  Pick the earliest start-end pair.
-    Everything else is unchanged.
+# ────────────────────────────────────────────────────────────────────────
+def compute_cc_passive_params(
+    time_s:      np.ndarray,
+    cmd_pA:      np.ndarray,
+    rsp_mV:      np.ndarray,
+    *,
+    I_hold_from_MT: float = 0.0,
+    scale_to_MOhm:  bool  = True,           # ⇦ flag ②
+    baseline_ms:    float = 20.0,
+    fit_window_ms:  float = 80.0,
+    min_step_pA:    float = 5.0,
+) -> dict:
     """
+    Passive parameters from the *first* test pulse in a CC sweep.
+
+    Returns the same dict keys as before but raises `RuntimeError`
+    **after** finishing if something makes the fit impossible.
+    """
+    errors: list[str] = []
+
+    # ── locate test-pulse bounds ------------------------------------------------
+    ts, te = _find_test_pulse(cmd_pA)
+    if ts is None:
+        raise RuntimeError("No test-pulse detected in this sweep.")
+
+    dt      = float(time_s[1] - time_s[0])
+    pre_pts = int(baseline_ms / 1000 / dt)
+
+    # ── baseline / steady-state voltages ---------------------------------------
+    V_pre   = float(np.mean(rsp_mV[max(0, ts-pre_pts): ts]))
+    V_ss    = float(np.mean(rsp_mV[te-pre_pts: te]))
+    dV_mV   = V_ss - V_pre                        # already mV
+
+    # ── current step amplitude --------------------------------------------------
+    I_hold  = float(np.mean(cmd_pA[max(0, ts-pre_pts): ts]))
+    I_step  = float(np.mean(cmd_pA[ts:te]) - I_hold)
+    if abs(I_step) < min_step_pA:
+        raise RuntimeError(f"Test-pulse amplitude < {min_step_pA} pA")
+
+    Rin = abs(dV_mV / I_step)                    # mV / pA → GΩ
+    if scale_to_MOhm:                            # ⇦ unit scaling flag
+        Rin *= 1_000.0                           # GΩ → MΩ
+
+    # ── τ fit on the first *fit_window_ms* of the decay -------------------------
+    fit_pts = int(fit_window_ms / 1000 / dt)
+    X_ms = (time_s[ts:ts+fit_pts] - time_s[ts]) * 1e3
+    Y_mV = rsp_mV[ts:ts+fit_pts] - V_ss
+
     try:
-        dt = float(1.0 / (len(time_s) / (time_s[-1] - time_s[0])))
-
-        # -----------------------------------------------------------------
-        # 1.  Derivative of the command to detect edges
-        # -----------------------------------------------------------------
-        dcmd = _np.diff(cmd_pA, prepend=cmd_pA[0])
-        thr  = 0.30 * _np.max(_np.abs(dcmd))       # 30 % of peak slope
-
-        neg_edges = _np.where(dcmd < -thr)[0]      # downward = start
-        pos_edges = _np.where(dcmd >  thr)[0]      # upward   = end
-        if neg_edges.size == 0 or pos_edges.size == 0:
-            raise RuntimeError("No current step edges detected.")
-
-        # earliest start, then first end AFTER that start
-        p_start = int(neg_edges[0])
-        p_end   = int(pos_edges[pos_edges > p_start][0])
-
-        # -----------------------------------------------------------------
-        # 2.  Passive calculations (identical maths)
-        # -----------------------------------------------------------------
-        V1 = float(_np.mean(rsp_mV[:p_start - 1]))
-        V2 = float(_np.mean(rsp_mV[int(p_start + 0.1/dt): p_end]))
-
-        I_hold = float(_np.mean(cmd_pA[:p_start - 10]))
-        I_step = float(_np.mean(cmd_pA[p_start + 10: p_start + 110]) - I_hold)
-
-        input_R = abs((V1 - V2) / I_step)          # MΩ  (mV / pA)
-        resting = V1 - (input_R * I_hold_from_MT)
-
-        # fit mono-exp over first 100 ms of that step
-        X = time_s[p_start : int(p_start + 0.1/dt)]
-        Y = rsp_mV[p_start : int(p_start + 0.1/dt)]
-
-        def _exp(x, m, t, b):
-            return m * _np.exp(-t * x) + b
-
-        m, t, b = _opt.curve_fit(
-            _exp, X[::25], Y[::25],
-            p0=(20.0, 10.0, rsp_mV[p_end]),
-            maxfev=100_000
-        )[0]
-
-        tau_ms = (1 / t) * 1e3                 # ms
-        Cm_pF  = (tau_ms / input_R)            # pF   (ms / MΩ)
-
-        return dict(
-            membrane_tau_ms          = tau_ms,
-            input_resistance_MOhm    = input_R,
-            membrane_capacitance_pF  = Cm_pF,
-            resting_potential_mV     = resting,
-            holding_current_pA       = I_hold
+        popt, _ = _opt.curve_fit(
+            lambda x, m, k, b: m*np.exp(-k*x)+b,
+            X_ms, Y_mV, p0=(Y_mV[0], 10, 0), maxfev=20_000
         )
+        tau_ms = 1.0 / popt[1]
+    except Exception as exc:                     # keep going but flag error
+        errors.append(f"τ-fit failed: {exc}")
+        tau_ms = np.nan
 
-    except Exception:
-        # tolerate failures so GUI / notebook doesn’t crash
-        return dict(
-            membrane_tau_ms          = None,
-            input_resistance_MOhm    = None,
-            membrane_capacitance_pF  = None,
-            resting_potential_mV     = None,
-            holding_current_pA       = None
-        )
+    Cm_pF = (tau_ms / Rin) if scale_to_MOhm else (tau_ms / (Rin/1_000))
+
+    result = dict(
+        membrane_tau_ms          = tau_ms,
+        input_resistance_MOhm    = Rin,
+        membrane_capacitance_pF  = Cm_pF,
+        resting_potential_mV     = V_pre,
+        holding_current_pA       = I_hold,
+    )
+
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+    return result
