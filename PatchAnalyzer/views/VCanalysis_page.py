@@ -7,7 +7,7 @@ import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from ..models.ephys_loader import load_voltage_traces_for_indices
+from ..models.data_loader import load_voltage_traces_for_indices
 from ..utils.ephys_analyzer import VprotAnalyzer      # NEW import
 
 
@@ -39,7 +39,7 @@ def _cell_id(img_name: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-class AnalysisPage(QtWidgets.QWidget):
+class VCAnalysisPage(QtWidgets.QWidget):
     """Left‑hand cell table  •  Command/Response stacked plots  •  Bottom controls."""
 
     # ------------------------------ signals (mirrors GroupPage naming) ----

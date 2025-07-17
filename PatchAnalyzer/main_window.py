@@ -8,7 +8,7 @@ from PyQt5 import QtWidgets
 
 from .models.data_loader import load_metadata
 from .utils.log import setup_logger
-from .views.analysis_page import AnalysisPage
+from .views.VCanalysis_page import VCAnalysisPage
 from .views.group_page import GroupPage
 from .views.welcome_page import WelcomePage
 from .views.map_page import MapPage
@@ -64,9 +64,9 @@ class PatchAnalyzerGUI(QtWidgets.QMainWindow):
 
     # ------------------------------------------------------- Group → Analysis
     def _open_analysis_page(self, meta_df: pd.DataFrame):
-        self.analysis = AnalysisPage(meta_df)
+        self.analysis = VCAnalysisPage(meta_df)
 
-        # NEW ───────── connect “← Back” from AnalysisPage to show GroupPage
+        # NEW ───────── connect “← Back” from VCnalysisPage to show GroupPage
         self.analysis.back_requested.connect(
             lambda: self.stack.setCurrentWidget(self.group)
         )
