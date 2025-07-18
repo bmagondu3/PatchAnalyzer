@@ -7,7 +7,7 @@ import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from ..models.data_loader import load_current_sweeps
+from ..models.data_loader import load_current_sweeps, load_current_traces
 
 _COL_IDS = [
     "unique_id", "indices", "src_dir", "group_label",
@@ -38,28 +38,25 @@ class CCAnalysisPage(QtWidgets.QWidget):
         super().__init__(parent)
         self.meta_df = meta_df.reset_index(drop=True)
 
+        # build cells exactly as in VCAnalysisPage – same UIDs & same image‑derived indices
+        from .VCanalysis_page import _cell_id  # reuse the same helper
+
         self._cells: list[dict] = []
         for uid, (coord, sub) in enumerate(
                 self.meta_df.groupby(["stage_x", "stage_y", "stage_z"]), start=1):
-            # cell_ids from image names are still collected for original VC context,
-            # but for CC indices we specifically look at CurrentProtocol files.
-            # We use the unique_id (based on coords) to group these.
             src_dir_path = Path(sub["src_dir"].iloc[0])
 
-            current_protocol_cell_ids = set()
-            cp_dir = src_dir_path / "CurrentProtocol"
-            if cp_dir.exists():
-                for csv_path in cp_dir.glob("*.csv"):
-                    m = _CP_CELL_ID_RE.match(csv_path.name)
-                    if m:
-                        current_protocol_cell_ids.add(int(m.group(1)))
+            # derive cell‑IDs from the image filenames – exactly like VC
+            image_ids = [_cell_id(img) for img in sub["image"]]
+            image_ids = [i for i in image_ids if i is not None]
+            image_ids = sorted(set(image_ids))
 
             self._cells.append(dict(
-                unique_id = uid,
-                coord     = coord,
-                src_dir   = src_dir_path,
+                unique_id   = uid,
+                coord       = coord,
+                src_dir     = src_dir_path,
                 group_label = sub["group_label"].iloc[0],
-                cell_ids  = sorted(list(current_protocol_cell_ids)), # These are the CC-specific indices for display/loading
+                cell_ids    = image_ids,
             ))
 
         self._param_label: pg.TextItem | None = None
@@ -86,7 +83,9 @@ class CCAnalysisPage(QtWidgets.QWidget):
         self.plot_rsp = pg.PlotWidget(background="w")
         self.plot_rsp.setLabel('left',   'Response (mV)')
         self.plot_rsp.setLabel('bottom', 'Time (ms)')
-        self.legend = self.plot_rsp.addLegend(offset=(-110, 30))
+        # place legend as a grid in the top-right
+        self.legend = self.plot_rsp.addLegend(offset=(-10, 10))
+        self.legend.setColumnCount(3)
         right_lay.addWidget(self.plot_rsp, 2)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -102,11 +101,9 @@ class CCAnalysisPage(QtWidgets.QWidget):
 
         self.btn_analyze = QtWidgets.QPushButton("Analyze ▶")
         bar.addWidget(self.btn_analyze)
-        # Analysis will do nothing for now, as per requirements.
-        self.btn_analyze.clicked.connect(self._on_analyze) # Still connect to show message
-        bar.addStretch(1) # Push elements to the right
+        self.btn_analyze.clicked.connect(self._on_analyze)
+        bar.addStretch(1)
 
-        # REORDERED: Next/Previous buttons are now next to Show Command
         self.btn_previous_protocol = QtWidgets.QPushButton("Previous Protocol")
         self.btn_previous_protocol.clicked.connect(self._on_previous_protocol_clicked)
         bar.addWidget(self.btn_previous_protocol)
@@ -116,7 +113,7 @@ class CCAnalysisPage(QtWidgets.QWidget):
         bar.addWidget(self.btn_next_protocol)
 
         self.chk_show_cmd = QtWidgets.QCheckBox("Show Command")
-        self.chk_show_cmd.setChecked(True) # Start checked by default
+        self.chk_show_cmd.setChecked(True)
         bar.addWidget(self.chk_show_cmd)
 
         self.btn_back = QtWidgets.QPushButton("← Back")
@@ -131,20 +128,17 @@ class CCAnalysisPage(QtWidgets.QWidget):
         root.addWidget(splitter, 1)
         root.addLayout(bar)
 
-        # Connect the checkbox to plot_cmd visibility directly.
-        # Initial visibility will be set by the checkbox's initial state.
         self.chk_show_cmd.toggled.connect(self.plot_cmd.setVisible)
-        # Set initial visibility of command plot based on checkbox
         self.plot_cmd.setVisible(self.chk_show_cmd.isChecked())
 
-
-        self._curve_pairs: list[tuple[pg.PlotDataItem, pg.PlotDataItem]] = []
-        self._selected_pair: tuple[pg.PlotDataItem, pg.PlotDataItem] | None = None
-        self._selected_curve: pg.PlotDataItem | None = None
+        self._curve_pairs = []
+        self._selected_pair = None
+        self._selected_curve = None
         self._resp2cmd: dict[pg.PlotDataItem, pg.PlotDataItem] = {}
 
         self._populate_table()
         self.table.selectionModel().selectionChanged.connect(self._on_row_selected)
+
 
     def _populate_table(self):
         self.table.setColumnCount(len(_COL_IDS))
@@ -154,17 +148,14 @@ class CCAnalysisPage(QtWidgets.QWidget):
 
         for r, cell in enumerate(self._cells):
             indices_str = ", ".join(map(str, cell["cell_ids"]))
-
             init_vals = {
-                "unique_id"  : str(cell["unique_id"]),
-                "indices"    : indices_str,
-                "src_dir"    : cell["src_dir"].name,
+                "unique_id": str(cell["unique_id"]),
+                "indices": indices_str,
+                "src_dir": cell["src_dir"].name,
                 "group_label": cell["group_label"],
-                "mean_rmp": "", "mean_tau": "", "mean_rm": "", "mean_cm": "",
-                "rmp_list": "", "tau_list": "", "rm_list": "", "cm_list": "",
+                **{k: "" for k in ("mean_rmp","mean_tau","mean_rm","mean_cm","rmp_list","tau_list","rm_list","cm_list")},
                 "has_cc": "",
             }
-
             for cid, text in init_vals.items():
                 item = QtWidgets.QTableWidgetItem(text)
                 item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
@@ -203,110 +194,119 @@ class CCAnalysisPage(QtWidgets.QWidget):
         lbl.setPos(xmin + 0.03 * (xmax - xmin),
                    ymin + 0.03 * (ymax - ymin))
 
-    def _on_row_selected(self, *_):
+    def _on_row_selected(self, *args):
         sel = self.table.selectionModel().selectedRows()
         if not sel:
             return
-        cell = self._cells[sel[0].row()]
+        row = sel[0].row()
+        cell = self._cells[row]
 
-        self._current_cell_index_display = 0 # Reset when a new row is selected
+        # reset protocol index only when row actually changes
+        if args:
+            self._current_cell_index_display = 0
 
-        # Clear previous curves / legend
+        # clear prior plots & state
         for p in (self.plot_cmd, self.plot_rsp):
             p.clear()
         self.legend.clear()
         self._curve_pairs.clear()
-        self._selected_pair = None
-        self._selected_curve = None # Reset selected curve
+        self._selected_curve = None
+        self._resp2cmd.clear()
 
-        self._resp2cmd: dict[pg.PlotDataItem, pg.PlotDataItem] = {}
-
-        # Display message on command plot initially ONLY if checkbox is ON
+        # placeholder in command plot if checked
         if self.chk_show_cmd.isChecked():
-            self.plot_cmd.addItem(pg.TextItem(html="<span style='color:blue'>Select a sweep to see corresponding command</span>"))
-        # Ensure plot_cmd visibility is always tied to the checkbox state
+            self.plot_cmd.addItem(pg.TextItem(
+                html="<span style='color:blue'>Select a sweep to see corresponding command</span>"
+            ))
         self.plot_cmd.setVisible(self.chk_show_cmd.isChecked())
 
-
-        cell_indices_for_this_uid = cell["cell_ids"]
-        if not cell_indices_for_this_uid:
-            self.plot_rsp.addItem(pg.TextItem(html="<span style='color:red'>No Current Protocol traces found for this UID</span>"))
-            if self.chk_show_cmd.isChecked(): # Clear command message if no traces
+        # Which “cell index” to load?
+        ids = cell["cell_ids"]
+        if not ids:
+            self.plot_rsp.addItem(pg.TextItem(
+                html="<span style='color:red'>No Current Protocol indices for this UID</span>"
+            ))
+            if self.chk_show_cmd.isChecked():
                 self.plot_cmd.clear()
-                self.plot_cmd.addItem(pg.TextItem(html="<span style='color:blue'>No Current Protocol sweeps for this UID</span>"))
+                self.plot_cmd.addItem(pg.TextItem(
+                    html="<span style='color:blue'>No sweeps for this UID</span>"
+                ))
             return
 
-        # NEW: Loading screen for traces on row selection
-        progress_dialog = QtWidgets.QProgressDialog(
-            f"Loading traces for cell index {cell_indices_for_this_uid[self._current_cell_index_display]}...",
-            None, 0, 0, self
+        cur_id = ids[self._current_cell_index_display]
+
+        # load raw traces: {current_pA: (t_s, cmd_pA, rsp_V)}
+        raw_map = load_current_traces(cell["src_dir"], [cur_id]).get(cur_id, {})
+        if not raw_map:
+            self.plot_rsp.addItem(pg.TextItem(
+                html="<span style='color:red'>No traces found for index %s</span>" % cur_id
+            ))
+            return
+
+        # progress dialog
+        dlg = QtWidgets.QProgressDialog(
+            f"Loading sweeps for index {cur_id}…", None, 0, 0, self
         )
-        progress_dialog.setWindowTitle("Loading Traces")
-        progress_dialog.setWindowModality(QtCore.Qt.ApplicationModal)
-        progress_dialog.setCancelButton(None)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.show()
+        dlg.setWindowTitle("Loading Traces")
+        dlg.setWindowModality(QtCore.Qt.ApplicationModal)
+        dlg.setCancelButton(None)
+        dlg.setMinimumDuration(0)
+        dlg.show()
         QtWidgets.QApplication.processEvents()
 
         try:
-            # Load only sweeps for the currently selected cell index from the list
-            traces_for_display_index = load_current_sweeps(
-                cell["src_dir"], [cell_indices_for_this_uid[self._current_cell_index_display]]
-            )
-
-            all_sweeps_for_current_cell_idx = []
-            if cell_indices_for_this_uid[self._current_cell_index_display] in traces_for_display_index:
-                all_sweeps_for_current_cell_idx = traces_for_display_index[cell_indices_for_this_uid[self._current_cell_index_display]]
-
-            if not all_sweeps_for_current_cell_idx:
-                self.plot_rsp.addItem(pg.TextItem(html="<span style='color:red'>No traces found for the selected Current Protocol Index</span>"))
-                if self.chk_show_cmd.isChecked():
-                    self.plot_cmd.clear()
-                    self.plot_cmd.addItem(pg.TextItem(html="<span style='color:blue'>No Current Protocol sweeps for this index</span>"))
-                return
-
             from functools import partial
 
-            for i, sweep in enumerate(all_sweeps_for_current_cell_idx):
-                t_ms = sweep.time * 1e3
+            # iterate sorted currents for consistent ordering
+            for amp in sorted(raw_map.keys()):
+                t_s, cmd_pA, rsp_V = raw_map[amp]
+                t_ms = t_s * 1e3
+                rsp_mV = rsp_V * 1e3
 
                 pen = pg.mkPen("red", width=1)
-                # Command curves are added but their visibility is controlled by selection logic
-                curve_cmd = self.plot_cmd.plot(t_ms, sweep.command_pA, pen=pen, clickable=True, name=f"Cmd {i}")
-                curve_rsp = self.plot_rsp.plot(t_ms, sweep.response_mV, pen=pen, clickable=True, name=f"Rsp {i}")
-
-                # Initially hide all command curves
+                # command (hidden until click)
+                curve_cmd = self.plot_cmd.plot(
+                    t_ms, cmd_pA, pen=pen, clickable=True
+                )
                 curve_cmd.setVisible(False)
 
-                curve_rsp.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
-                curve_cmd.sigClicked.connect(partial(self._on_response_clicked, curve_rsp)) # Also connect clicks on command to response handler
+                # response, labeled by actual current
+                label = f"{int(amp)} pA"
+                curve_rsp = self.plot_rsp.plot(
+                    t_ms, rsp_mV, pen=pen, clickable=True, name=label
+                )
 
-                label_item = self.legend.items[-1][1]
-                label_item.setAcceptHoverEvents(True)
-                def _make_toggle(c1=curve_cmd, c2=curve_rsp, lbl=label_item):
+                # click both to highlight
+                curve_rsp.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
+                curve_cmd.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
+
+                # legend‐toggle (grid layout set in __init__)
+                _, lbl = self.legend.items[-1]
+                lbl.setAcceptHoverEvents(True)
+                def make_toggle(c1=curve_cmd, c2=curve_rsp, legend_lbl=lbl):
                     def _toggle(_):
-                        # Toggle visibility of response curve and legend label
-                        vis_rsp = not c2.isVisible()
-                        c2.setVisible(vis_rsp)
-                        lbl.setOpacity(1.0 if vis_rsp else 0.3)
-                        # Ensure command curve visibility follows selected response visibility if it was selected
+                        vis = not c2.isVisible()
+                        c2.setVisible(vis)
+                        legend_lbl.setOpacity(1.0 if vis else 0.3)
                         if self._selected_curve is c2:
-                            c1.setVisible(vis_rsp and self.chk_show_cmd.isChecked())
-                        else: # If not the selected curve, always hide command when toggling response off
+                            c1.setVisible(vis and self.chk_show_cmd.isChecked())
+                        else:
                             c1.setVisible(False)
-                        self._update_plot_opacities() # Reapply opacities to all visible curves
+                        self._update_plot_opacities()
                     return _toggle
-                label_item.mousePressEvent = _make_toggle()
+                lbl.mousePressEvent = make_toggle()
 
                 self._curve_pairs.append((curve_cmd, curve_rsp))
                 self._resp2cmd[curve_rsp] = curve_cmd
-            self.plot_rsp.enableAutoRange()
-        finally:
-            progress_dialog.close()
 
+            self.plot_rsp.enableAutoRange()
+
+        finally:
+            dlg.close()
+
+        # update UI
         self._show_param_label(cell)
         self._update_protocol_buttons()
-
 
     def _update_protocol_buttons(self):
         sel = self.table.selectionModel().selectedRows()
