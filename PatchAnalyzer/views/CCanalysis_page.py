@@ -6,7 +6,8 @@ import re, hashlib
 import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
-
+from ..utils.ephys_analyzer import CprotAnalyzer          # ← NEW
+import numpy as np                                        # ← NE
 from ..models.data_loader import load_current_sweeps, load_current_traces
 
 _COL_IDS = [
@@ -24,6 +25,13 @@ _COL_HEADERS = [
     "Has CC?",
 ]
 
+_SWEEP_COLS = [
+    "Cell(UniqueID)", "Index", "coordinates", "Source Dir", "Group Label",
+    "Injected current (pA)", "RMP mV", "Tau ms", "Rm (Mohms)", "Cm (pF)",
+    "Firing rate (Hz)", "mean AP peak mV", "mean AP hwdt(ms)",
+    "threshold", "dV/dt max (mV/s)",
+]
+
 _ID_RE = re.compile(r"cell[_\-]?(\d+)", re.IGNORECASE)
 _CP_CELL_ID_RE = re.compile(r"CurrentProtocol_(\d+)_#")
 
@@ -37,6 +45,8 @@ class CCAnalysisPage(QtWidgets.QWidget):
     def __init__(self, meta_df: pd.DataFrame, parent=None):
         super().__init__(parent)
         self.meta_df = meta_df.reset_index(drop=True)
+        self._cprot = CprotAnalyzer()  # ← NEW: Current Protocol Analyzer
+        self._sweep_df: pd.DataFrame = pd.DataFrame(columns=_SWEEP_COLS)
 
         # build cells exactly as in VCAnalysisPage – same UIDs & same image‑derived indices
         from .VCanalysis_page import _cell_id  # reuse the same helper
@@ -393,8 +403,89 @@ class CCAnalysisPage(QtWidgets.QWidget):
             r_curve.setPen("red", width=width_rsp)
 
 
+    # ───────────────────────────────────────────────────────── analysis button
     def _on_analyze(self):
-        QtWidgets.QMessageBox.information(self, "Analysis", "Analysis functionality for CC protocols is not yet implemented.")
+        """
+        For **every sweep** across all loaded cells:
+        • compute passive params, firing rate, and spike metrics
+        • append one row per sweep to self._sweep_df
+        """
+        rows = []
+        total_cells = len(self._cells)
+        dlg = QtWidgets.QProgressDialog("Analyzing current‑clamp sweeps…",
+                                        None, 0, total_cells, self)
+        dlg.setWindowTitle("Please wait")
+        dlg.setWindowModality(QtCore.Qt.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.show()
+
+        for idx, cell in enumerate(self._cells, 1):
+            dlg.setLabelText(f"Cell {idx} / {total_cells}")
+            QtWidgets.QApplication.processEvents()
+
+            # load {cell_id: {amp_pA: (t, cmd_pA, rsp_V)}}
+            traces_map = load_current_traces(cell["src_dir"], cell["cell_ids"])
+            for cell_id, amp_dict in traces_map.items():
+                for amp_pA, (t, cmd_pA, rsp_V) in amp_dict.items():
+                    try:
+                        # ---------------- passive params ----------------
+                        cmd_V   = cmd_pA / self._cprot.clamp_gain
+                        rsp_mV  = rsp_V * 1e3
+                        pas = self._cprot.passive_params(t, cmd_V, rsp_mV)
+
+                        rmp  = pas["resting_potential_mV"]
+                        tau  = pas["membrane_tau_ms"]
+                        rm   = pas["input_resistance_MOhm"]*1000  # GΩ → MΩ
+                        cm   = pas["membrane_capacitance_pF"] 
+                    except Exception:
+                        rmp = tau = rm = cm = np.nan      # keep sweep anyway
+
+                    # ---------------- firing rate ----------------------
+                    fi = self._cprot.firing_curve([(t, cmd_V, rsp_mV)])
+                    fr = float(fi["mean_firing_frequency_Hz"].iloc[0]) \
+                         if not fi.empty else np.nan
+
+                    # ---------------- spike metrics -------------------
+                    spk = self._cprot.spike_metrics([(t, cmd_V, rsp_mV)])
+                    if spk.empty:
+                        peak = hwdt = thr = dvdt = np.nan
+                    else:
+                        peak = spk["peak_mV"].mean()
+                        hwdt = spk["half_width_ms"].mean()
+                        thr  = spk["threshold_mV"].mean()
+                        dvdt = spk["dvdt_max_mV_per_ms"].mean() * 1_000  # → mV/s
+
+                    rows.append({
+                        "Cell(UniqueID)"         : cell["unique_id"],
+                        "Index"                  : cell_id,
+                        "coordinates"            : cell["coord"],
+                        "Source Dir"             : cell["src_dir"].name,
+                        "Group Label"            : cell["group_label"],
+                        "Injected current (pA)"  : amp_pA,
+                        "RMP mV"                 : rmp,
+                        "Tau ms"                 : tau,
+                        "Rm (Mohms)"             : rm,
+                        "Cm (pF)"                : cm,
+                        "Firing rate (Hz)"       : fr,
+                        "mean AP peak mV"        : peak,
+                        "mean AP hwdt(ms)"       : hwdt,
+                        "threshold"              : thr,
+                        "dV/dt max (mV/s)"       : dvdt,
+                    })
+
+            dlg.setValue(idx)
+            if dlg.wasCanceled():
+                break
+        dlg.close()
+
+        # build the master per‑sweep DataFrame
+        self._sweep_df = pd.DataFrame(rows, columns=_SWEEP_COLS)
+
+        QtWidgets.QMessageBox.information(
+            self, "Current‑Clamp Analysis",
+            f"Analysis complete – {len(self._sweep_df)} sweeps processed."
+        )
+
 
     def _analyze_cell(self, traces: dict):
         stats = {cid: "–" for cid in (
@@ -415,29 +506,17 @@ class CCAnalysisPage(QtWidgets.QWidget):
             item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, self._col_idx[cid], item)
 
+    # ─────────────────────────────────────────────────────── export button
     def _save_full_csv(self):
-        rows = []
-        for cell in self._cells:
-            rows.append({
-                "UID"        : cell["unique_id"],
-                "Indices"    : ", ".join(map(str, cell["cell_ids"])),
-                "stage_x"    : cell["coord"][0],
-                "stage_y"    : cell["coord"][1],
-                "stage_z"    : cell["coord"][2],
-                "src_dir"    : cell["src_dir"].name,
-                "group_label": cell["group_label"],
-                "Mean_RMP_mV": cell.get("mean_rmp", "–"),
-                "Mean_Tau_ms": cell.get("mean_tau", "–"),
-                "Mean_Rm_MOhm": cell.get("mean_rm", "–"),
-                "Mean_Cm_pF" : cell.get("mean_cm", "–"),
-                "RMP_list_mV": cell.get("rmp_list", ""),
-                "Tau_list_ms": cell.get("tau_list", ""),
-                "Rm_list_MOhm": cell.get("rm_list", ""),
-                "Cm_list_pF" : cell.get("cm_list", ""),
-                "Has_CC?"    : cell.get("has_cc", "–"),
-            })
-        pd.DataFrame(rows).to_csv(
-            QtWidgets.QFileDialog.getSaveFileName(
-                self, "Save Analysis as CSV", "",
-                "CSV Files (*.csv);;All Files (*)")[0],
-            index=False)
+        if self._sweep_df.empty:
+            QtWidgets.QMessageBox.warning(
+                self, "Nothing to save",
+                "Run the analysis first – no per‑sweep data available.")
+            return
+
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Per‑Sweep Analysis as CSV", "",
+            "CSV Files (*.csv);;All Files (*)")
+        if not path:
+            return
+        self._sweep_df.to_csv(path, index=False)
