@@ -129,8 +129,8 @@ gs  = fig.add_gridspec(nrows=3, ncols=4, height_ratios=[2,1,1])
 
 # ── PANEL C (split: points ±SD  |  line ±CI) ──────────────────────────
 # reserve two axes: left (col 0‑1) and right (col 2‑3)
-axC_pt  = fig.add_subplot(gs[0, 0:2])   # points ±SD
-axC_ln  = fig.add_subplot(gs[0, 2:4])   # line ±CI
+axC_pt  = fig.add_subplot(gs[0, 2:4])   # points ±SD
+# axC_ln  = fig.add_subplot(gs[0, 2:4])   # line ±CI
 
 # --- compute 110 % x‑limit once, reuse for both axes ------------------
 max_I   = fi_stats["I_bin"].max()
@@ -164,63 +164,90 @@ axC_pt.legend(frameon=False)
 # ---------------------------------------------------------------------
 # C‑right: existing continuous line  ± 95 % CI
 # ---------------------------------------------------------------------
-for grp, colour in zip(["GFP","TAU"], [DARK_GREEN, LIGHT_GREEN]):
-    sub = fi_stats[fi_stats["Group"] == grp].dropna(subset=["mean"])
-    x   = sub["I_bin"].to_numpy(float)
-    y   = sub["mean"].to_numpy(float)
-    lo  = sub["ci_lo"].to_numpy(float)
-    hi  = sub["ci_hi"].to_numpy(float)
-    n   = cell_counts.get(grp, 0)
-    axC_ln.plot(x, y,
-                color=colour,
-                label=f"{grp} (n={n})")
-    axC_ln.fill_between(x, lo, hi,
-                        color=colour,
-                        alpha=0.25)
+# for grp, colour in zip(["GFP","TAU"], [DARK_GREEN, LIGHT_GREEN]):
+#     sub = fi_stats[fi_stats["Group"] == grp].dropna(subset=["mean"])
+#     x   = sub["I_bin"].to_numpy(float)
+#     y   = sub["mean"].to_numpy(float)
+#     lo  = sub["ci_lo"].to_numpy(float)
+#     hi  = sub["ci_hi"].to_numpy(float)
+#     n   = cell_counts.get(grp, 0)
+#     axC_ln.plot(x, y,
+#                 color=colour,
+#                 label=f"{grp} (n={n})")
+#     axC_ln.fill_between(x, lo, hi,
+#                         color=colour,
+#                         alpha=0.25)
 
-axC_ln.set_title("C‑right. Mean ± 95 % CI (continuous)", fontweight="bold", fontsize=10)
-axC_ln.set_xlabel("Injected current / capacitance  (pA per pF)")
-axC_ln.set_ylabel("Mean firing frequency  (Hz)")
-axC_ln.set_xlim(0, xlim_up)
-axC_ln.legend(frameon=False)
+# axC_ln.set_title("C‑right. Mean ± 95 % CI (continuous)", fontweight="bold", fontsize=10)
+# axC_ln.set_xlabel("Injected current / capacitance  (pA per pF)")
+# axC_ln.set_ylabel("Mean firing frequency  (Hz)")
+# axC_ln.set_xlim(0, xlim_up)
+# axC_ln.legend(frameon=False)
 
-
+# 0) put this once near the top (so jitter is repeatable)
+rng = np.random.default_rng(42)          # reproducible jitter
 # ── Panel D  (4 separate axes) ───────────
 for i, prm in enumerate(PASSIVE):
     ax = fig.add_subplot(gs[1, i])
-    for grp, colour in zip(["GFP","TAU"], [DARK_GREEN, LIGHT_GREEN]):
+
+    for grp, colour, xpos in zip(["GFP", "TAU"],
+                                 [DARK_GREEN, LIGHT_GREEN],
+                                 [0, 1]):
         vals = cell_vals.loc[cell_vals["Group"] == grp, prm].dropna()
-        bp = ax.boxplot(vals, positions=[0 if grp=="GFP" else 1],
-                        widths=0.6, patch_artist=True,
+
+        # box‐and‐whisker, but leave boxes transparent
+        bp = ax.boxplot(vals,
+                        positions=[xpos],
+                        widths=0.55,
+                        patch_artist=True,
                         medianprops=dict(color="black"))
-        bp["boxes"][0].set_facecolor(colour)
-        for part in ("whiskers","caps","fliers"):
+        bp["boxes"][0].set_facecolor('none')    # ← clear box
+        for part in ("whiskers", "caps"):
             plt.setp(bp[part], color="black")
+
+        # overlay coloured dots
+        jitter = rng.normal(0, 0.08, len(vals))
+        ax.scatter(xpos + jitter, vals,
+                   s=25,
+                   color=colour,          # coloured fill
+                   edgecolor="black",
+                   linewidths=0.3,
+                   alpha=0.9)
+
     set_whisker_ylim(ax, cell_vals[prm])
-    ax.set_xticks([0,1])
-    ax.set_xticklabels(["Ctrl", "Tau"])
-    ax.set_title(prm, fontsize=10)
-    ax.tick_params(axis="y", labelsize=8)
-fig.text(0.02, 0.55, "D.\nPassive parameters", fontweight="bold",
-         ha="left", va="center", fontsize=12)
+    ax.set_xticks([0, 1]);  ax.set_xticklabels(["Ctrl", "Tau"])
+    ax.set_title(prm, fontsize=10);  ax.tick_params(axis="y", labelsize=8)
 
 # ── Panel E  (4 separate axes) ───────────
 for i, prm in enumerate(ACTIVE):
     ax = fig.add_subplot(gs[2, i])
-    for grp, colour in zip(["GFP","TAU"], [DARK_GREEN, LIGHT_GREEN]):
+
+    for grp, colour, xpos in zip(["GFP", "TAU"],
+                                 [DARK_GREEN, LIGHT_GREEN],
+                                 [0, 1]):
         vals = cell_vals.loc[cell_vals["Group"] == grp, prm].dropna()
-        bp = ax.boxplot(vals, positions=[0 if grp=="GFP" else 1],
-                        widths=0.6, patch_artist=True,
+
+        bp = ax.boxplot(vals,
+                        positions=[xpos],
+                        widths=0.55,
+                        patch_artist=True,
                         medianprops=dict(color="black"))
-        bp["boxes"][0].set_facecolor(colour)
-        for part in ("whiskers","caps","fliers"):
-            plt.setp(bp[part], color="black")
+        bp["boxes"][0].set_facecolor('none')  # ← clear box
+        for part in ("whiskers", "caps"):
+            plt.setp(bp[part],  color="black")
+
+        jitter = rng.normal(0, 0.08, size=len(vals))
+        ax.scatter(xpos + jitter, vals,
+                   s=25,
+                   color=colour,
+                   edgecolor="black",
+                   linewidths=0.3,
+                   alpha=0.8)
+
     set_whisker_ylim(ax, cell_vals[prm])
-    ax.set_xticks([0,1])
+    ax.set_xticks([0, 1])
     ax.set_xticklabels(["Ctrl", "Tau"])
     ax.set_title(prm, fontsize=10)
     ax.tick_params(axis="y", labelsize=8)
-fig.text(0.02, 0.28, "E.\nActive parameters  (4 pA/pF)",
-         ha="left", va="center", fontweight="bold", fontsize=12)
 
 plt.show()
