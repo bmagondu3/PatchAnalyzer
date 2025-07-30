@@ -1,3 +1,4 @@
 /Data
 /PatchAnalyzer/logs
 *.pyc
+/testcode
