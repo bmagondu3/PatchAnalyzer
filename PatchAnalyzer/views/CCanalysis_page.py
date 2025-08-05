@@ -35,6 +35,10 @@ _SWEEP_COLS = [
 _ID_RE = re.compile(r"cell[_\-]?(\d+)", re.IGNORECASE)
 _CP_CELL_ID_RE = re.compile(r"CurrentProtocol_(\d+)_#")
 
+# How aggressively do we subsample the display?
+SUBSAMPLE_DISPLAY = 1_000        # show every 10 000-th sample
+
+
 class CCAnalysisPage(QtWidgets.QWidget):
     """Left‑hand cell table  •  Command/Response stacked plots  •  Bottom controls."""
 
@@ -72,6 +76,8 @@ class CCAnalysisPage(QtWidgets.QWidget):
         self._param_label: pg.TextItem | None = None
         self._param_conn    = None
         self._current_cell_index_display = 0
+        self._uid2cell = {c["unique_id"]: c for c in self._cells}
+
 
         self.table = QtWidgets.QTableWidget(
             selectionBehavior=QtWidgets.QAbstractItemView.SelectRows,
@@ -113,6 +119,10 @@ class CCAnalysisPage(QtWidgets.QWidget):
         bar.addWidget(self.btn_analyze)
         self.btn_analyze.clicked.connect(self._on_analyze)
         bar.addStretch(1)
+
+        self.btn_omit_protocol = QtWidgets.QPushButton("Omit Protocol")
+        self.btn_omit_protocol.clicked.connect(self._on_omit_protocol)
+        bar.addWidget(self.btn_omit_protocol)
 
         self.btn_previous_protocol = QtWidgets.QPushButton("Previous Protocol")
         self.btn_previous_protocol.clicked.connect(self._on_previous_protocol_clicked)
@@ -203,19 +213,16 @@ class CCAnalysisPage(QtWidgets.QWidget):
         (xmin, xmax), (ymin, ymax) = self.plot_rsp.viewRange()
         lbl.setPos(xmin + 0.03 * (xmax - xmin),
                    ymin + 0.03 * (ymax - ymin))
-
+        
     def _on_row_selected(self, *args):
-        sel = self.table.selectionModel().selectedRows()
-        if not sel:
+        row, cell = self._current_cell()
+        if cell is None:
             return
-        row = sel[0].row()
-        cell = self._cells[row]
 
-        # reset protocol index only when row actually changes
         if args:
             self._current_cell_index_display = 0
 
-        # clear prior plots & state
+        # clear previous
         for p in (self.plot_cmd, self.plot_rsp):
             p.clear()
         self.legend.clear()
@@ -223,14 +230,12 @@ class CCAnalysisPage(QtWidgets.QWidget):
         self._selected_curve = None
         self._resp2cmd.clear()
 
-        # placeholder in command plot if checked
         if self.chk_show_cmd.isChecked():
             self.plot_cmd.addItem(pg.TextItem(
                 html="<span style='color:blue'>Select a sweep to see corresponding command</span>"
             ))
         self.plot_cmd.setVisible(self.chk_show_cmd.isChecked())
 
-        # Which “cell index” to load?
         ids = cell["cell_ids"]
         if not ids:
             self.plot_rsp.addItem(pg.TextItem(
@@ -245,15 +250,16 @@ class CCAnalysisPage(QtWidgets.QWidget):
 
         cur_id = ids[self._current_cell_index_display]
 
-        # load raw traces: {current_pA: (t_s, cmd_pA, rsp_V)}
-        raw_map = load_current_traces(cell["src_dir"], [cur_id]).get(cur_id, {})
+        # one-and-only thinning happens here ↓
+        raw_map = load_current_traces(
+            cell["src_dir"], [cur_id], thin=SUBSAMPLE_DISPLAY
+        ).get(cur_id, {})
         if not raw_map:
             self.plot_rsp.addItem(pg.TextItem(
-                html="<span style='color:red'>No traces found for index %s</span>" % cur_id
+                html=f"<span style='color:red'>No traces found for index {cur_id}</span>"
             ))
             return
 
-        # progress dialog
         dlg = QtWidgets.QProgressDialog(
             f"Loading sweeps for index {cur_id}…", None, 0, 0, self
         )
@@ -267,30 +273,26 @@ class CCAnalysisPage(QtWidgets.QWidget):
         try:
             from functools import partial
 
-            # iterate sorted currents for consistent ordering
             for amp in sorted(raw_map.keys()):
-                t_s, cmd_pA, rsp_V = raw_map[amp]
-                t_ms = t_s * 1e3
+                t_s, cmd_pA, rsp_V = raw_map[amp]      # already thinned
+                t_ms   = t_s * 1e3
                 rsp_mV = rsp_V * 1e3
 
                 pen = pg.mkPen("red", width=1)
-                # command (hidden until click)
+
                 curve_cmd = self.plot_cmd.plot(
                     t_ms, cmd_pA, pen=pen, clickable=True
                 )
                 curve_cmd.setVisible(False)
 
-                # response, labeled by actual current
                 label = f"{int(amp)} pA"
                 curve_rsp = self.plot_rsp.plot(
                     t_ms, rsp_mV, pen=pen, clickable=True, name=label
                 )
 
-                # click both to highlight
                 curve_rsp.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
                 curve_cmd.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
 
-                # legend‐toggle (grid layout set in __init__)
                 _, lbl = self.legend.items[-1]
                 lbl.setAcceptHoverEvents(True)
                 def make_toggle(c1=curve_cmd, c2=curve_rsp, legend_lbl=lbl):
@@ -314,36 +316,62 @@ class CCAnalysisPage(QtWidgets.QWidget):
         finally:
             dlg.close()
 
-        # update UI
         self._show_param_label(cell)
         self._update_protocol_buttons()
 
     def _update_protocol_buttons(self):
-        sel = self.table.selectionModel().selectedRows()
-        if not sel:
+        """Updates the protocol buttons"""
+        _, cell = self._current_cell()
+        if cell is None:
             self.btn_previous_protocol.setEnabled(False)
             self.btn_next_protocol.setEnabled(False)
             return
-
-        cell = self._cells[sel[0].row()]
+        
         num_protocols = len(cell["cell_ids"])
-
         self.btn_previous_protocol.setEnabled(self._current_cell_index_display > 0)
         self.btn_next_protocol.setEnabled(self._current_cell_index_display < num_protocols - 1)
 
-    def _on_next_protocol_clicked(self):
-        sel = self.table.selectionModel().selectedRows()
-        if not sel: return
-        cell = self._cells[sel[0].row()]
-        num_protocols = len(cell["cell_ids"])
 
+    def _on_omit_protocol(self):
+        """Remove the currently displayed protocol index from this cell."""
+        _, cell = self._current_cell()
+        if cell is None or not cell["cell_ids"]:
+            return
+
+        cur_id = cell["cell_ids"][self._current_cell_index_display]
+        # Optional safety prompt ------------------------------------------
+        reply = QtWidgets.QMessageBox.question(
+            self, "Omit Protocol",
+            f"Omit protocol index {cur_id} from further analysis?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        # ------------------------------------------------------------------
+
+        cell["cell_ids"].remove(cur_id)                # ← real omission
+
+        # Keep index in range and refresh UI
+        if self._current_cell_index_display >= len(cell["cell_ids"]):
+            self._current_cell_index_display = max(0, len(cell["cell_ids"]) - 1)
+        self._on_row_selected()                        # redraw plots & buttons
+
+    def _on_next_protocol_clicked(self):
+        _, cell = self._current_cell()
+        if cell is None:
+            return
+
+
+        num_protocols = len(cell["cell_ids"])
         if self._current_cell_index_display < num_protocols - 1:
             self._current_cell_index_display += 1
             self._on_row_selected()
 
     def _on_previous_protocol_clicked(self):
-        sel = self.table.selectionModel().selectedRows()
-        if not sel: return
+        _, cell = self._current_cell()
+        if cell is None:
+            return
 
         if self._current_cell_index_display > 0:
             self._current_cell_index_display -= 1
@@ -426,34 +454,32 @@ class CCAnalysisPage(QtWidgets.QWidget):
             # load {cell_id: {amp_pA: (t, cmd_pA, rsp_V)}}
             traces_map = load_current_traces(cell["src_dir"], cell["cell_ids"])
             for cell_id, amp_dict in traces_map.items():
-                for amp_pA, (t, cmd_pA, rsp_V) in amp_dict.items():
+                for amp_pA, (t, cmd_V, rsp_V) in amp_dict.items():
                     try:
                         # ---------------- passive params ----------------
-                        cmd_V   = cmd_pA / self._cprot.clamp_gain
-                        rsp_mV  = rsp_V * 1e3
-                        pas = self._cprot.passive_params(t, cmd_V, rsp_mV)
+                        pas = self._cprot.passive_params(t, cmd_V, rsp_V)
 
                         rmp  = pas["resting_potential_mV"]
                         tau  = pas["membrane_tau_ms"]
-                        rm   = pas["input_resistance_MOhm"]*1000  # GΩ → MΩ
+                        rm   = pas["input_resistance_MOhm"] 
                         cm   = pas["membrane_capacitance_pF"] 
                     except Exception:
                         rmp = tau = rm = cm = np.nan      # keep sweep anyway
 
                     # ---------------- firing rate ----------------------
-                    fi = self._cprot.firing_curve([(t, cmd_V, rsp_mV)])
+                    fi = self._cprot.firing_curve([(t, cmd_V, rsp_V)])
                     fr = float(fi["mean_firing_frequency_Hz"].iloc[0]) \
                          if not fi.empty else np.nan
 
                     # ---------------- spike metrics -------------------
-                    spk = self._cprot.spike_metrics([(t, cmd_V, rsp_mV)])
+                    spk = self._cprot.spike_metrics([(t, cmd_V, rsp_V)])
                     if spk.empty:
                         peak = hwdt = thr = dvdt = np.nan
                     else:
                         peak = spk["peak_mV"].mean()
                         hwdt = spk["half_width_ms"].mean()
                         thr  = spk["threshold_mV"].mean()
-                        dvdt = spk["dvdt_max_mV_per_ms"].mean() * 1_000  # → mV/s
+                        dvdt = spk["dvdt_max_mV_per_ms"].mean()
 
                     rows.append({
                         "Cell(UniqueID)"         : cell["unique_id"],
@@ -505,6 +531,20 @@ class CCAnalysisPage(QtWidgets.QWidget):
             item = QtWidgets.QTableWidgetItem(val)
             item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, self._col_idx[cid], item)
+
+    def _current_cell(self):
+        """Return (row_index_in_view, cell_dict) or (None, None) if nothing chosen."""
+        sel = self.table.selectionModel().selectedRows()
+        if not sel:
+            return None, None
+
+        row_in_view = sel[0].row()                      # row number *after* sorting
+        uid_item = self.table.item(row_in_view, self._col_idx["unique_id"])
+        if uid_item is None:
+            return None, None
+        uid = int(uid_item.text())
+        return row_in_view, self._uid2cell[uid]         # look up the real cell
+
 
     # ─────────────────────────────────────────────────────── export button
     def _save_full_csv(self):

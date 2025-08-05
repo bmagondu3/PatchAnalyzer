@@ -295,65 +295,65 @@ class CprotAnalyzer:
         Same semantics as in :pyclass:`VprotAnalyzer`.
     """
 
-    clamp_gain: float = 400.0
+    cclamp_gain: float = 400.0*1e-12  # 400 pA/V
+    vclamp_gain: float = 1e3  # 1000 mV/V
     debug: bool = False
     last_debug: dict[str, Any] = field(default_factory=dict, init=False)
+
 
     # ───────────────────────── passive parameters ───────────────────────
     def passive_params(
         self,
         time_s: np.ndarray,
         cmd_V:  np.ndarray,
-        rsp_mV: np.ndarray,
+        rsp_V: np.ndarray,
         *,
         baseline_ms: float = 20.0,
         fit_window_ms: float = 80.0,
         min_step_pA: float = 5.0,
         return_intermediates: bool = False,
-    ) -> dict[str, float | None] | tuple[dict[str, float | None], dict[str, Any]]:
-        """Return **one** dict with the same keys as the old function.
-
-        The command vector *must* be in **Volts**; it is converted by
-        ``cmd_V * clamp_gain`` internally.
-        """
-        # convert → pA immediately
-        cmd_pA = cmd_V * self.clamp_gain
+    ):
+        # convert stimulus  V → pA
+        cmd_pA = cmd_V * self.cclamp_gain
+        rsp_mV = rsp_V * self.vclamp_gain    # V → mV
 
         dbg: dict[str, Any] = {}
         errors: list[str] = []
 
-        # locate –20 pA test pulse
+        # ── locate test-pulse
         ts, te = self._find_test_pulse(cmd_pA)
         if ts is None:
-            raise RuntimeError("No test‑pulse detected in this sweep.")
+            raise RuntimeError("No test-pulse detected in this sweep.")
 
-        dt = float(time_s[1] - time_s[0])
-        pre_pts = int(baseline_ms / 1000 / dt)
+        dt       = float(time_s[1] - time_s[0])
+        pre_pts  = int(baseline_ms / 1000 / dt)
 
-        V_pre = float(np.mean(rsp_mV[max(0, ts - pre_pts) : ts]))
-        V_ss = float(np.mean(rsp_mV[te - pre_pts : te]))
-        dV_mV = V_ss - V_pre
+        V_pre    = float(np.mean(rsp_mV[max(0, ts - pre_pts) : ts]))
+        V_ss     = float(np.mean(rsp_mV[te - pre_pts : te]))
+        dV_mV    = V_ss - V_pre
 
-        I_hold = float(np.mean(cmd_pA[max(0, ts - pre_pts) : ts]))
-        I_step = float(np.mean(cmd_pA[ts:te]) - I_hold)
+        I_hold   = float(np.mean(cmd_pA[max(0, ts - pre_pts) : ts]))
+        I_step   = float(np.mean(cmd_pA[ts:te]) - I_hold)
         if abs(I_step) < min_step_pA:
-            raise RuntimeError(f"Test‑pulse amplitude < {min_step_pA} pA")
+            raise RuntimeError(f"Test-pulse amplitude < {min_step_pA} pA")
 
-        Rin_MOhm = abs(dV_mV / I_step)  # mV / pA
-        tau_ms = self._fit_tau(
+        Rin_MOhm = abs(dV_mV / I_step) # in MΩ
+        tau_ms   = self._fit_tau(
             time_s[ts : ts + int(fit_window_ms / 1000 / dt)] - time_s[ts],
             rsp_mV[ts : ts + int(fit_window_ms / 1000 / dt)],
             V_ss,
             errors,
         )
-        Cm_pF = tau_ms / Rin_MOhm if (Rin_MOhm and not np.isnan(tau_ms)) else np.nan
+        tau_s = tau_ms * 1e-3 # convert ms → seconds
+        Cm_pF    = tau_s / Rin_MOhm if (Rin_MOhm and not np.isnan(tau_ms)) else np.nan  # F → pF
+        # -----------------------------------------------
 
         result = dict(
-            membrane_tau_ms=tau_ms,
-            input_resistance_MOhm=Rin_MOhm,
-            membrane_capacitance_pF=Cm_pF,
-            resting_potential_mV=V_pre,
-            holding_current_pA=I_hold,
+            membrane_tau_ms       = tau_ms,
+            input_resistance_MOhm = Rin_MOhm,
+            membrane_capacitance_pF = Cm_pF,
+            resting_potential_mV  = V_pre,
+            holding_current_pA    = I_hold,
         )
 
         if errors:
@@ -380,7 +380,7 @@ class CprotAnalyzer:
 
         conv: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         for t, cmd_V, rsp in sweeps:
-            conv.append((t, cmd_V * self.clamp_gain, rsp))
+            conv.append((t, cmd_V * self.cclamp_gain, rsp*self.vclamp_gain))  # V → mV
         return self._calc_firing_curve(conv, **kwargs)
 
     def spike_metrics(
@@ -396,7 +396,7 @@ class CprotAnalyzer:
 
         conv: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         for t, cmd_V, rsp in sweeps:
-            conv.append((t, cmd_V * self.clamp_gain, rsp))
+            conv.append((t, cmd_V * self.cclamp_gain, rsp*self.vclamp_gain))  # V → mV
         return self._calc_spike_metrics(conv, **kwargs)
 
     # ───────────────────────── internal helpers ────────────────────────
@@ -438,7 +438,7 @@ class CprotAnalyzer:
     def _calc_firing_curve(
         sweeps: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
         *,
-        peak_prominence_mV: float = 12.0,
+        peak_prominence_mV: float = 25.0,
         smooth_pts: int = 50,
         normalize_by_Cm: bool = False,
         Cm_pF: float | None = None,
@@ -498,66 +498,69 @@ class CprotAnalyzer:
 
         rows, skips = [], []
         for s_idx, (time_s, cmd_pA, rsp_mV) in enumerate(sweeps, 1):
+
             try:
                 ts, te = CprotAnalyzer._find_test_pulse(cmd_pA)
                 es, ee = CprotAnalyzer._find_experimental_pulse(cmd_pA, te)
                 if es is None:
                     raise ValueError("no experimental pulse detected")
 
-                sr = 1.0 / (time_s[1] - time_s[0])
+                sr   = 1.0 / (time_s[1] - time_s[0])
                 peaks = CprotAnalyzer._detect_spikes(rsp_mV[es:ee], sr) + es
-                if not len(peaks):
+                if not peaks.size:
                     continue
 
-                dt = 1.0 / sr
-                dvdt = np.gradient(rsp_mV, dt * 1e3)
-                win = int(half_width_window_ms / 1000 / dt)
-
+                dt     = 1.0 / sr
+                dvdt   = np.gradient(rsp_mV, dt * 1e3)    # mV / ms
+                win    = int(half_width_window_ms / 1000 / dt)
                 I_step = CprotAnalyzer._step_current_pA(cmd_pA, es, ee)
+
+                # ---------- metric extraction unchanged ----------
                 if normalize_by_Cm:
+                    print("normalize_by_Cm is set")
                     if not Cm_pF or Cm_pF <= 0:
                         raise ValueError("Cm_pF missing for normalisation")
                     I_step_pApF = I_step / Cm_pF
 
                 for p_num, pk in enumerate(peaks):
-                    prom = signal.peak_prominences(rsp_mV, [pk])[0][0]
+                    prom     = signal.peak_prominences(rsp_mV, [pk])[0][0]
                     half_val = rsp_mV[pk] - 0.5 * prom
-                    local = rsp_mV[pk - win : pk + win]
-                    xloc = np.where(local > half_val)[0]
+                    local    = rsp_mV[pk - win : pk + win]
+                    xloc     = np.where(local > half_val)[0]
                     if xloc.size < 2:
                         continue
                     hw_ms = (xloc[-1] - xloc[0]) * dt * 1e3
 
                     dv_seg = dvdt[pk - win : pk]
-                    below = np.where(dv_seg < dvdt_threshold_mV_per_ms)[0]
-                    thr_i = pk - win + below[-1] if below.size else pk
+                    below  = np.where(dv_seg < dvdt_threshold_mV_per_ms)[0]
+                    thr_i  = pk - win + below[-1] if below.size else pk
                     thr_mV = rsp_mV[thr_i]
 
                     dv_max = dvdt[pk - win : pk + win].max()
-                    ahp_mV = abs(
-                        rsp_mV[pk : pk + int(0.006 / dt)].min() - thr_mV
-                    )
+                    ahp_mV = abs(rsp_mV[pk : pk + int(0.006 / dt)].min() - thr_mV)
 
                     row = dict(
-                        sweep=s_idx,
-                        spike_number=p_num,
-                        current_inj_pA=I_step,
-                        peak_mV=rsp_mV[pk],
-                        half_width_ms=hw_ms,
-                        AHP_mV=ahp_mV,
-                        threshold_mV=thr_mV,
-                        dvdt_max_mV_per_ms=dv_max,
+                        sweep               = s_idx,
+                        spike_number        = p_num,
+                        current_inj_pA      = I_step,
+                        peak_mV             = rsp_mV[pk],
+                        half_width_ms       = hw_ms,
+                        AHP_mV              = ahp_mV,
+                        threshold_mV        = thr_mV,
+                        dvdt_max_mV_per_ms  = dv_max,
                     )
                     if normalize_by_Cm:
+                        print("normalized injections being added")
                         row["current_inj_pApF"] = I_step_pApF
                     rows.append(row)
+                # -------------------------------------------------
             except Exception as exc:
                 skips.append(f"Sweep {s_idx}: {exc}")
                 if fail_fast:
                     raise
+
         if skips:
             import warnings
-
             warnings.warn("; ".join(skips))
         return pd.DataFrame(rows)
 
@@ -579,7 +582,7 @@ class CprotAnalyzer:
 
     # --------------------------- spike detect --------------------------
     @staticmethod
-    def _detect_spikes(trace_mV, sr_Hz, *, prom_mV=12, smooth_pts=50):
+    def _detect_spikes(trace_mV, sr_Hz, *, prom_mV=25, smooth_pts=50):
         sm = signal.convolve(trace_mV, np.ones(smooth_pts) / smooth_pts, mode="same")
         peaks, _ = signal.find_peaks(
             sm,

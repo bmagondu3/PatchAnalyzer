@@ -90,19 +90,17 @@ def load_voltage_traces_for_indices(
 _REGEX = re.compile(
     r"CurrentProtocol_(\d+)_#[0-9A-Fa-f]{6}_([+-]?\d+(?:\.\d+)?)\.csv$"
 )
-C_CLAMP_PAPERV = 400.0     # 400 pA / V  (Axon Multiclamp 700 default)
+# Add near the top (if not already present)
+C_CLAMP_PAPERV = 400.0          # 400 pA / V
 
+# Replace the whole function with this version
 def load_current_traces(
     src_dir: Path,
     cell_indices: list[int] | tuple[int] | set[int],
+    *,                       # keyword-only from here on
+    thin: int | None = None  # e.g. 10_000 for plotting, None for analysis
 ) -> dict[int, dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]]]:
-    """
-    Return a nested dict
-        {cell_id: {current_inj_pA: (time, cmd_pA, rsp_V)}}
 
-    • The command vector is auto-converted from Volts → pA (×400).  
-    • Empty *cell_indices* ⇒ empty dict.
-    """
     cp_dir = src_dir / "CurrentProtocol"
     if not cp_dir.exists():
         return {}
@@ -117,16 +115,24 @@ def load_current_traces(
         if not m:
             continue
 
-        cell_id = int(m.group(1))
+        cell_id   = int(m.group(1))
+        current_pA = float(m.group(2))
         if cell_id not in wanted:
             continue
 
-        current_pA = float(m.group(2))
         t, cmd, rsp = _read_csv(csv_path)
+
+        # ↓ subsample **only** if trace is long enough
+        if thin and thin > 1 and len(t) > thin:
+            t   = t[::thin]
+            cmd = cmd[::thin]
+            rsp = rsp[::thin]
+
         traces[cell_id][current_pA] = (t, cmd * C_CLAMP_PAPERV, rsp)
 
-    # strip empty cells
     return {cid: d for cid, d in traces.items() if d}
+
+
 
 
 # ────────────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import numpy as np, pandas as pd, matplotlib.pyplot as plt
 #    "VOLTAGE"  – replace each cell’s Cm with its average from VprotRowan.csv
 CM_SOURCE   = "VOLTAGE"            # or "VOLTAGE"
 V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\VprotRowan.csv")
-CSV_PATH = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\CprotRowan.csv")
+CSV_PATH = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\CprotRowan4.csv")
 BIN_STEP      = 0.5             # pA/pF bins for F–I curve (panel C)
 CM_RANGE      = (20, 500)       # keep cells whose Cm∈[20,500] pF
 TAU_MAX       = 200             # ms – drop rows with Tau > 200
@@ -161,28 +161,7 @@ axC_pt.set_ylabel("Mean firing frequency  (Hz)")
 axC_pt.set_xlim(-4, 32)
 axC_pt.legend(frameon=False)
 
-# ---------------------------------------------------------------------
-# C‑right: existing continuous line  ± 95 % CI
-# ---------------------------------------------------------------------
-# for grp, colour in zip(["GFP","TAU"], [DARK_GREEN, LIGHT_GREEN]):
-#     sub = fi_stats[fi_stats["Group"] == grp].dropna(subset=["mean"])
-#     x   = sub["I_bin"].to_numpy(float)
-#     y   = sub["mean"].to_numpy(float)
-#     lo  = sub["ci_lo"].to_numpy(float)
-#     hi  = sub["ci_hi"].to_numpy(float)
-#     n   = cell_counts.get(grp, 0)
-#     axC_ln.plot(x, y,
-#                 color=colour,
-#                 label=f"{grp} (n={n})")
-#     axC_ln.fill_between(x, lo, hi,
-#                         color=colour,
-#                         alpha=0.25)
 
-# axC_ln.set_title("C‑right. Mean ± 95 % CI (continuous)", fontweight="bold", fontsize=10)
-# axC_ln.set_xlabel("Injected current / capacitance  (pA per pF)")
-# axC_ln.set_ylabel("Mean firing frequency  (Hz)")
-# axC_ln.set_xlim(0, xlim_up)
-# axC_ln.legend(frameon=False)
 
 # 0) put this once near the top (so jitter is repeatable)
 rng = np.random.default_rng(42)          # reproducible jitter
