@@ -36,9 +36,8 @@ def find_voltage_image(folder: Path, cell_image_name: str) -> Path | None:
 
 def find_current_image(folder: Path, cell_image_name: str) -> Path | None:
     """
-    Locate CurrentProtocol_<id>_<colour>.png (case-insensitive) in *folder*/CurrentProtocol.
-
-    Only that exact pattern is accepted — no extra suffixes.
+    Locate *CurrentProtocol_<id>.png*  **OR**  *CurrentProtocol_<id>_anything.png*
+    (case-insensitive) in *folder*/CurrentProtocol.
     """
     m = _CELL_RE.search(cell_image_name)
     if not m:
@@ -49,12 +48,14 @@ def find_current_image(folder: Path, cell_image_name: str) -> Path | None:
     if not cp_dir.exists():
         return None
 
-    # Case-insensitive exact filename match
-    target = f"currentprotocol_{cell_id}_*.png"
+    prefix = f"currentprotocol_{cell_id}".lower()   # no trailing “_”
     for f in cp_dir.glob("*.png"):
-        if f.is_file() and f.name.lower().startswith(target.lower()):
+        fn = f.name.lower()
+        if fn.startswith(prefix) and fn.endswith(".png"):
             return f
     return None
+
+
 
 def find_holding_image(folder: Path, cell_image_name: str) -> Path | None:
     """

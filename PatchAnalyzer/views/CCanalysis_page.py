@@ -9,6 +9,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from ..utils.ephys_analyzer import CprotAnalyzer          # ← NEW
 import numpy as np                                        # ← NE
 from ..models.data_loader import load_current_sweeps, load_current_traces
+from ..utils.helpers import find_current_image            # image locator
+
 
 _COL_IDS = [
     "unique_id", "indices", "src_dir", "group_label",
@@ -96,13 +98,22 @@ class CCAnalysisPage(QtWidgets.QWidget):
         self.plot_cmd.setLabel('bottom', 'Time (ms)')
         right_lay.addWidget(self.plot_cmd, 1)
 
+
         self.plot_rsp = pg.PlotWidget(background="w")
         self.plot_rsp.setLabel('left',   'Response (mV)')
         self.plot_rsp.setLabel('bottom', 'Time (ms)')
-        # place legend as a grid in the top-right
         self.legend = self.plot_rsp.addLegend(offset=(-10, 10))
         self.legend.setColumnCount(3)
-        right_lay.addWidget(self.plot_rsp, 2)
+
+        self.img_label = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
+        self.img_label.setScaledContents(True)           # auto-fit
+
+        self.stacked_rsp = QtWidgets.QStackedWidget()
+        self.stacked_rsp.addWidget(self.plot_rsp)        # idx 0  – data plots
+        self.stacked_rsp.addWidget(self.img_label)       # idx 1  – PNG image
+
+        right_lay.addWidget(self.stacked_rsp, 2)
+
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter.addWidget(self.table)
@@ -119,6 +130,11 @@ class CCAnalysisPage(QtWidgets.QWidget):
         bar.addWidget(self.btn_analyze)
         self.btn_analyze.clicked.connect(self._on_analyze)
         bar.addStretch(1)
+
+        self.btn_toggle_view = QtWidgets.QPushButton("Show Data")   # default = image first
+        self.btn_toggle_view.clicked.connect(self._toggle_view)
+        bar.addWidget(self.btn_toggle_view)
+
 
         self.btn_omit_protocol = QtWidgets.QPushButton("Omit Protocol")
         self.btn_omit_protocol.clicked.connect(self._on_omit_protocol)
@@ -155,6 +171,8 @@ class CCAnalysisPage(QtWidgets.QWidget):
         self._selected_pair = None
         self._selected_curve = None
         self._resp2cmd: dict[pg.PlotDataItem, pg.PlotDataItem] = {}
+        self._pending_traces_info = None        # holds (cell, cur_id) until needed
+
 
         self._populate_table()
         self.table.selectionModel().selectionChanged.connect(self._on_row_selected)
@@ -218,6 +236,11 @@ class CCAnalysisPage(QtWidgets.QWidget):
         row, cell = self._current_cell()
         if cell is None:
             return
+        
+        self.img_label.clear()                                   
+        self.stacked_rsp.setCurrentWidget(self.plot_rsp)         
+        self.btn_toggle_view.setText("Show Image")               
+        self.plot_cmd.setVisible(self.chk_show_cmd.isChecked())  
 
         if args:
             self._current_cell_index_display = 0
@@ -250,74 +273,28 @@ class CCAnalysisPage(QtWidgets.QWidget):
 
         cur_id = ids[self._current_cell_index_display]
 
-        # one-and-only thinning happens here ↓
-        raw_map = load_current_traces(
-            cell["src_dir"], [cur_id], thin=SUBSAMPLE_DISPLAY
-        ).get(cur_id, {})
-        if not raw_map:
-            self.plot_rsp.addItem(pg.TextItem(
-                html=f"<span style='color:red'>No traces found for index {cur_id}</span>"
-            ))
-            return
+        # -------- image-first logic (never load traces here) -------------
+        img_path = find_current_image(cell["src_dir"], f"cell_{cur_id}")
 
-        dlg = QtWidgets.QProgressDialog(
-            f"Loading sweeps for index {cur_id}…", None, 0, 0, self
-        )
-        dlg.setWindowTitle("Loading Traces")
-        dlg.setWindowModality(QtCore.Qt.ApplicationModal)
-        dlg.setCancelButton(None)
-        dlg.setMinimumDuration(0)
-        dlg.show()
-        QtWidgets.QApplication.processEvents()
+        self.img_label.clear()                      # reset previous content
+        if img_path and img_path.exists():
+            self.img_label.setPixmap(QtGui.QPixmap(str(img_path)))
+        else:
+            self.img_label.setText(
+                "<span style='color:gray;font-size:12pt'>No protocol image available</span>"
+            )
 
-        try:
-            from functools import partial
-
-            for amp in sorted(raw_map.keys()):
-                t_s, cmd_pA, rsp_V = raw_map[amp]      # already thinned
-                t_ms   = t_s * 1e3
-                rsp_mV = rsp_V * 1e3
-
-                pen = pg.mkPen("red", width=1)
-
-                curve_cmd = self.plot_cmd.plot(
-                    t_ms, cmd_pA, pen=pen, clickable=True
-                )
-                curve_cmd.setVisible(False)
-
-                label = f"{int(amp)} pA"
-                curve_rsp = self.plot_rsp.plot(
-                    t_ms, rsp_mV, pen=pen, clickable=True, name=label
-                )
-
-                curve_rsp.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
-                curve_cmd.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
-
-                _, lbl = self.legend.items[-1]
-                lbl.setAcceptHoverEvents(True)
-                def make_toggle(c1=curve_cmd, c2=curve_rsp, legend_lbl=lbl):
-                    def _toggle(_):
-                        vis = not c2.isVisible()
-                        c2.setVisible(vis)
-                        legend_lbl.setOpacity(1.0 if vis else 0.3)
-                        if self._selected_curve is c2:
-                            c1.setVisible(vis and self.chk_show_cmd.isChecked())
-                        else:
-                            c1.setVisible(False)
-                        self._update_plot_opacities()
-                    return _toggle
-                lbl.mousePressEvent = make_toggle()
-
-                self._curve_pairs.append((curve_cmd, curve_rsp))
-                self._resp2cmd[curve_rsp] = curve_cmd
-
-            self.plot_rsp.enableAutoRange()
-
-        finally:
-            dlg.close()
-
-        self._show_param_label(cell)
+        self.stacked_rsp.setCurrentWidget(self.img_label)   # always show image/placeholder
+        self.btn_toggle_view.setText("Show Data")           # user can load sweeps on demand
+        self.plot_cmd.setVisible(False)                     # hide command plot
+        self._pending_traces_info = (cell, cur_id)          # remember what to load later
+        self._curve_pairs.clear()                           # ensure clean state
+        self._resp2cmd.clear()
+        self.legend.clear()
         self._update_protocol_buttons()
+        self._show_param_label(cell)
+        return                                                # <- exit early
+
 
     def _update_protocol_buttons(self):
         """Updates the protocol buttons"""
@@ -352,6 +329,8 @@ class CCAnalysisPage(QtWidgets.QWidget):
 
         cell["cell_ids"].remove(cur_id)                # ← real omission
 
+        self.img_label.clear()                   # ← NEW: drop any pixmap
+        self.stacked_rsp.setCurrentWidget(self.plot_rsp)  # ← NEW: force plot view
         # Keep index in range and refresh UI
         if self._current_cell_index_display >= len(cell["cell_ids"]):
             self._current_cell_index_display = max(0, len(cell["cell_ids"]) - 1)
@@ -429,6 +408,91 @@ class CCAnalysisPage(QtWidgets.QWidget):
 
             r_curve.setOpacity(opacity_rsp)
             r_curve.setPen("red", width=width_rsp)
+
+    def _load_traces_for_current(self, cell: dict, cur_id: int):
+        """Former inline plotting loop, now a reusable method."""
+        raw_map = load_current_traces(
+            cell["src_dir"], [cur_id], thin=SUBSAMPLE_DISPLAY
+        ).get(cur_id, {})
+        if not raw_map:
+            self.plot_rsp.addItem(pg.TextItem(
+                html=f"<span style='color:red'>No traces found for index {cur_id}</span>"
+            ))
+            return
+
+        dlg = QtWidgets.QProgressDialog(
+            f"Loading sweeps for index {cur_id}…", None, 0, 0, self
+        )
+        dlg.setWindowTitle("Loading Traces")
+        dlg.setWindowModality(QtCore.Qt.ApplicationModal)
+        dlg.setCancelButton(None)
+        dlg.setMinimumDuration(0)
+        dlg.show()
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            from functools import partial
+            for amp in sorted(raw_map.keys()):
+                t_s, cmd_pA, rsp_V = raw_map[amp]
+                t_ms   = t_s * 1e3
+                rsp_mV = rsp_V * 1e3
+
+                pen = pg.mkPen("red", width=1)
+
+                curve_cmd = self.plot_cmd.plot(
+                    t_ms, cmd_pA, pen=pen, clickable=True
+                )
+                curve_cmd.setVisible(False)
+
+                label = f"{int(amp)} pA"
+                curve_rsp = self.plot_rsp.plot(
+                    t_ms, rsp_mV, pen=pen, clickable=True, name=label
+                )
+
+                curve_rsp.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
+                curve_cmd.sigClicked.connect(partial(self._on_response_clicked, curve_rsp))
+
+                _, lbl = self.legend.items[-1]
+                lbl.setAcceptHoverEvents(True)
+
+                def make_toggle(c1=curve_cmd, c2=curve_rsp, legend_lbl=lbl):
+                    def _toggle(_):
+                        vis = not c2.isVisible()
+                        c2.setVisible(vis)
+                        legend_lbl.setOpacity(1.0 if vis else 0.3)
+                        if self._selected_curve is c2:
+                            c1.setVisible(vis and self.chk_show_cmd.isChecked())
+                        else:
+                            c1.setVisible(False)
+                        self._update_plot_opacities()
+                    return _toggle
+                lbl.mousePressEvent = make_toggle()
+
+                self._curve_pairs.append((curve_cmd, curve_rsp))
+                self._resp2cmd[curve_rsp] = curve_cmd
+
+            self.plot_rsp.enableAutoRange()
+        finally:
+            dlg.close()
+
+
+    # ─────────────────────────────────────────────────────────────
+    def _toggle_view(self):
+        """Flip between protocol image and data plots."""
+        if self.stacked_rsp.currentWidget() is self.img_label:
+            # switching to DATA
+            if not self.plot_rsp.listDataItems() and self._pending_traces_info:
+                cell, cur_id = self._pending_traces_info
+                self._load_traces_for_current(cell, cur_id)
+                self._pending_traces_info = None
+            self.stacked_rsp.setCurrentWidget(self.plot_rsp)
+            self.btn_toggle_view.setText("Show Image")
+            self.plot_cmd.setVisible(self.chk_show_cmd.isChecked())
+        else:
+            # switching to IMAGE
+            self.stacked_rsp.setCurrentWidget(self.img_label)
+            self.btn_toggle_view.setText("Show Data")
+            self.plot_cmd.setVisible(False)
 
 
     # ───────────────────────────────────────────────────────── analysis button
