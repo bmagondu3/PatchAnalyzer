@@ -548,7 +548,7 @@ class CprotAnalyzer:
 
                 # ---------- metric extraction unchanged ----------
                 if normalize_by_Cm:
-                    print("normalize_by_Cm is set")
+                    # print("normalize_by_Cm is set")
                     if not Cm_pF or Cm_pF <= 0:
                         raise ValueError("Cm_pF missing for normalisation")
                     I_step_pApF = I_step / Cm_pF
@@ -581,7 +581,7 @@ class CprotAnalyzer:
                         dvdt_max_mV_per_ms  = dv_max,
                     )
                     if normalize_by_Cm:
-                        print("normalized injections being added")
+                        # print("normalized injections being added")
                         row["current_inj_pApF"] = I_step_pApF
                     rows.append(row)
                 # -------------------------------------------------

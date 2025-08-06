@@ -9,8 +9,8 @@ import numpy as np, pandas as pd, matplotlib.pyplot as plt
 #    "CURRENT"  – use Cm values from the current‑clamp CSV (default)
 #    "VOLTAGE"  – replace each cell’s Cm with its average from VprotRowan.csv
 CM_SOURCE   = "VOLTAGE"            # or "VOLTAGE"
-V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\VprotRowan.csv")
-CSV_PATH = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\CprotRowan4.csv")
+V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\VprotRowan3.csv")
+CSV_PATH = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\CprotRowan8625.csv")
 BIN_STEP      = 0.5             # pA/pF bins for F–I curve (panel C)
 CM_RANGE      = (20, 500)       # keep cells whose Cm∈[20,500] pF
 TAU_MAX       = 200             # ms – drop rows with Tau > 200
