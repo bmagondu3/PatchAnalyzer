@@ -25,6 +25,17 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 import scipy.optimize as opt
 from scipy import signal
+# for ignoring peak prominence of zero errors. comment out below 2 lines if you would like to view in console.
+# ── EDIT PeakPropertyWarning START ──────────────────────
+import warnings
+try:                                # SciPy ≥1.9 keeps it internal
+    from scipy.signal._peak_finding import PeakPropertyWarning
+except ImportError:                 # fallback for older / future versions
+    class PeakPropertyWarning(UserWarning):
+        pass
+warnings.filterwarnings("ignore", category=PeakPropertyWarning)
+# ── EDIT PeakPropertyWarning END ────────────────────────
+
 
 __all__ = [
     "VprotAnalyzer",
@@ -295,8 +306,8 @@ class CprotAnalyzer:
         Same semantics as in :pyclass:`VprotAnalyzer`.
     """
 
-    cclamp_gain: float = 400.0*1e-12  # 400 pA/V
-    vclamp_gain: float = 1e3  # 1000 mV/V
+    cclamp_gain: float = 400.0  # 400 pA/V
+    vclamp_gain: float = 1000.0  # 1000 mV/V
     debug: bool = False
     last_debug: dict[str, Any] = field(default_factory=dict, init=False)
 
@@ -337,7 +348,8 @@ class CprotAnalyzer:
         if abs(I_step) < min_step_pA:
             raise RuntimeError(f"Test-pulse amplitude < {min_step_pA} pA")
 
-        Rin_MOhm = abs(dV_mV / I_step) # in MΩ
+        Rin_GOhm = abs(dV_mV / I_step) # in GΩ
+        Rin_MOhm = Rin_GOhm * 1e3 # now in MΩ
         tau_ms   = self._fit_tau(
             time_s[ts : ts + int(fit_window_ms / 1000 / dt)] - time_s[ts],
             rsp_mV[ts : ts + int(fit_window_ms / 1000 / dt)],
@@ -345,7 +357,9 @@ class CprotAnalyzer:
             errors,
         )
         tau_s = tau_ms * 1e-3 # convert ms → seconds
-        Cm_pF    = tau_s / Rin_MOhm if (Rin_MOhm and not np.isnan(tau_ms)) else np.nan  # F → pF
+        Rin_Ohm = Rin_MOhm*1e6 # convert MOhms →  Ohms
+        Cm_F    = (tau_s / (Rin_Ohm)) if (Rin_GOhm and not np.isnan(tau_ms)) else np.nan 
+        Cm_pF = Cm_F*1e12 # F → pF
         # -----------------------------------------------
 
         result = dict(
@@ -403,20 +417,37 @@ class CprotAnalyzer:
     # -------------------------- passive τ fit --------------------------
     @staticmethod
     def _fit_tau(X_rel_s: np.ndarray, Y_mV: np.ndarray, V_ss: float, errors: list[str]):
+        """
+        Fit the membrane voltage decay with a *single* exponential
+        (no offset term).  The stimulus is assumed to be a hyper‑/depolarising
+        step that has already been centred around the steady‑state level
+        (V_ss).  This removes the redundant `b` parameter and allows the fit
+        to use negative amplitudes, which is essential for correctly
+        estimating τ for hyperpolarising steps.
+        """
+        # Convert relative time (seconds) → milliseconds
         X_ms = X_rel_s * 1e3
+
+        # Remove the steady‑state voltage – the exponential will start from 0
         Y = Y_mV - V_ss
+
         try:
-            popt, _ = opt.curve_fit(
-                lambda x, m, k, b: m * np.exp(-k * x) + b,
-                X_ms,
-                Y,
-                p0=(Y[0], 10, 0),
-                maxfev=20_000,
-            )
+            with np.errstate(over="ignore", under="ignore"):
+                # Fit m * exp(-k * x)  (2‑parameter model)
+                popt, _ = opt.curve_fit(
+                    lambda x, m, k: m * np.exp(-k * x),
+                    X_ms,
+                    Y,
+                    p0=(Y[0], 10),                           # initial guess
+                    bounds=([-np.inf, 0], [np.inf, 1e3]),      # m free (±∞), k ≥ 0
+                    maxfev=20_000,
+                )
+            # τ = 1 / k  (k is in ms⁻¹)
             return 1.0 / popt[1]
         except Exception as exc:
             errors.append(f"τ‑fit failed: {exc}")
             return np.nan
+
 
     # -------------------------- shared helpers -------------------------
     @staticmethod
@@ -571,7 +602,7 @@ class CprotAnalyzer:
             return None, None
         post = cmd_pA[after_idx : after_idx + max(1, int(0.02 * cmd_pA.size))]
         baseline = np.median(post)
-        thr = max(2.0, 0.05 * np.ptp(cmd_pA))
+        thr = max(0.5, 0.02 * np.ptp(cmd_pA))     # recognise ±20 pA steps
         mask = (np.abs(cmd_pA - baseline) > thr) & (np.arange(cmd_pA.size) > after_idx)
         idxs = np.where(mask)[0]
         if idxs.size == 0:
