@@ -4,23 +4,24 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # ─────────────────────────────────────────────────────────────────────────────
-# USER-TWEAKABLE CONSTANTS
+# USER-TWEAKABLE CONSTANTS (kept same defaults)
 # ─────────────────────────────────────────────────────────────────────────────
 CM_SOURCE   = "VOLTAGE"   # "CURRENT" → keep CC Cm;  "VOLTAGE" → prefer VC Cm
-V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\VprotRowan3.csv")
-CSV_PATH    = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\CprotRowan8625.csv")
+V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_control_cultured_exp\Levi_control_voltage_08625.csv")
+CSV_PATH    = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_control_cultured_exp\Levi_control_current_08625.csv")
 
 BIN_STEP      = 0.5      # pA / pF – bin width for F–I curve
 CM_RANGE      = (20, 500)  # pF      – keep cells with sensible Cm
 TAU_MAX       = 200        # ms      – drop rows with absurd τ
 I_RATIO_MAX   = 60         # pA / pF – truncate extreme x-axis values
 
-# COLOUR SCHEME
-DARK_GREEN  = "darkgreen"   # GFP / Ctrl
-LIGHT_GREEN = "lightgreen"  # Tau
-RED         = "#b30000"     # VC overlay
+# COLOUR SCHEME (legacy colors kept; dynamic palette used below)
+DARK_GREEN  = "darkgreen"   # historical
+LIGHT_GREEN = "lightgreen"  # historical
+RED         = "#b30000"      # VC overlay
 
 RNG = np.random.default_rng(42)       # reproducible jitter
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 0 │ DATA HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -39,7 +40,7 @@ def load_cc_data(csv_path: Path) -> pd.DataFrame:
         "mean AP hwdt(ms)"     : "APhwdt",
         "dV/dt max (mV/s)"     : "dVdt",
     })
-    df["Group"] = df["Group"].str.upper()
+    df["Group"] = df["Group"].astype(str).str.upper()
     # ----- unit-scaling requested -------------------------------------------
     df["Rm"] *= 100      # input-resistance ×100 → correct MΩ
     df["Cm"] /= 100     # capacitance ÷100     → correct pF
@@ -54,7 +55,7 @@ def load_vc_data(v_csv_path: Path) -> pd.DataFrame:
         "mean_Rm_MOhm"     : "Rm_VC",
         "mean_Cm_pF"       : "Cm_VC",
     })
-    vdf["Group"] = vdf["Group"].str.upper()
+    vdf["Group"] = vdf["Group"].astype(str).str.upper()
     # ----- τ  (τ = Cm × R_parallel) -----------------------------------------
     Ra_ohm = vdf["Ra_VC"] * 1e6
     Rm_ohm = vdf["Rm_VC"] * 1e6
@@ -64,9 +65,17 @@ def load_vc_data(v_csv_path: Path) -> pd.DataFrame:
     return vdf[["UID", "Group", "Rm_VC", "Cm_VC", "Tau_VC"]]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Palette helper (readable categorical colors)
+# ─────────────────────────────────────────────────────────────────────────────
+def make_group_palette(groups):
+    """Return a dict {group: color}, using a readable qualitative palette."""
+    cmap = plt.get_cmap("Set2")  # designed for categorical data
+    colors = [cmap(i % cmap.N) for i in range(len(groups))]
+    return {g: c for g, c in zip(groups, colors)}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 1 │ PREPARE MASTER DATAFRAME
 # ─────────────────────────────────────────────────────────────────────────────
-
 cc_df = load_cc_data(CSV_PATH)          # current-clamp summary (always)
 vc_df = load_vc_data(V_CSV_PATH)        # voltage-protocol summary (always)
 
@@ -78,7 +87,6 @@ if CM_SOURCE.upper() == "VOLTAGE":
 else:  # "CURRENT"
     cc_df["Cm_used"] = cc_df["Cm"]
 
-
 # ----- basic cleaning --------------------------------------------------------
 mask  = (cc_df["Cm"].between(*CM_RANGE)) & (cc_df["Tau"] <= TAU_MAX)
 cc_df = cc_df[mask].copy()
@@ -88,6 +96,10 @@ cm_mean = cc_df.groupby("UID")["Cm_used"].transform("mean")
 cc_df["I_norm"] = cc_df["Iinj"] / cm_mean
 cc_df = cc_df[cc_df["I_norm"].between(-5, I_RATIO_MAX)]
 cc_df["I_bin"] = (cc_df["I_norm"] / BIN_STEP).round() * BIN_STEP
+
+# Discover groups present and set colors
+GROUPS = sorted(cc_df["Group"].dropna().unique().tolist())
+colour_map = make_group_palette(GROUPS)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2 │   F-I CURVE  (mean ± SD  + n)
@@ -116,14 +128,11 @@ PASSIVE = ["RMP", "Tau", "Rm", "Cm"]
 ACTIVE  = ["APpeak", "APhwdt", "threshold", "dVdt"]
 
 # ----- VC overlay (group-level means) ----------------------------------------
-if vc_df is not None:
-    vc_grp_mean = vc_df.groupby("Group").agg({
-        "Rm_VC" : "mean",
-        "Cm_VC" : "mean",
-        "Tau_VC": "mean"
-    })
-else:
-    vc_grp_mean = pd.DataFrame()
+vc_grp_mean = vc_df.groupby("Group").agg({
+    "Rm_VC" : "mean",
+    "Cm_VC" : "mean",
+    "Tau_VC": "mean"
+})
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4 │   PLOTTING
@@ -131,26 +140,27 @@ else:
 fig = plt.figure(figsize=(14, 9), constrained_layout=True)
 gs  = fig.add_gridspec(nrows=3, ncols=4, height_ratios=[2, 1, 1])
 
-# ―― PANEL C – F-I curve (group means ± SD) ――――――――――――――――――――――――――――――
+# ―― PANEL C – F-I curve (group means ± SEM) ――――――――――――――――――――――――――――――
 PLOT_STEPS   = np.arange(-2, 32, 2)               # display only these bins
 total_cells  = cell_vals.groupby("Group")["UID"].nunique()   # overall n
 
 axC = fig.add_subplot(gs[0, 2:4])
 
-for grp, colour in zip(["GFP", "TAU"], [DARK_GREEN, LIGHT_GREEN]):
+for grp in GROUPS:
     rows = fi_stats[(fi_stats["Group"] == grp) &
-                    (fi_stats["I_bin"].isin(PLOT_STEPS))]
-    x, y, sem = rows["I_bin"], rows["mean"], rows["sem"]
+                    (fi_stats["I_bin"].isin(PLOT_STEPS))].copy()
+    if rows.empty:
+        continue
+    x, y, sem = rows["I_bin"], rows["mean"], rows["sem"].fillna(0.0)
     axC.errorbar(x, y, yerr=sem,
                  fmt="o", capsize=4, markersize=6,
-                 color=colour,
-                 label=f"{grp} (n={total_cells.get(grp, 0)})")
-    
-        # ← ADD THIS LOOP
+                 color=colour_map[grp],
+                 label=f"{grp} (n={int(total_cells.get(grp, 0))})")
     for xi, yi, ni in zip(x, y, rows["n"]):
-        axC.text(xi, yi + 0.05*axC.get_ylim()[1],  # slight offset above marker
-                 f"n={int(ni)}",
-                 color=colour, fontsize=7, ha="center", va="bottom")
+        if np.isfinite(yi):
+            axC.text(float(xi), float(yi),
+                     f"n={int(ni)}",
+                     color=colour_map[grp], fontsize=7, ha="center", va="bottom")
 
 axC.set_xlabel("Injected current / capacitance  (pA per pF)")
 axC.set_ylabel("Mean firing frequency  (Hz)")
@@ -159,17 +169,23 @@ axC.set_xlim(PLOT_STEPS.min() - 1, PLOT_STEPS.max() + 1)
 axC.grid(True, linestyle="--", alpha=.3)
 axC.legend(frameon=False)
 
-
 # ―― helper to tighten y-range to whiskers ――――――――――――――――――――――――――――――
 def _tight_ylim(ax, data: pd.Series) -> None:
-    q1, q3 = np.percentile(data.dropna(), [25, 75])
-    iqr = q3 - q1
+    data = pd.Series(data).dropna()
+    if data.empty:
+        return
+    q1, q3 = np.percentile(data, [25, 75])
+    iqr = q3 - q1 if q3 > q1 else (q1*0.1 if q1 != 0 else 1.0)
     ax.set_ylim(q1 - 1.5*iqr, q3 + 1.5*iqr)
 
 # ―― helper to draw transparent box + jitter + VC overlay ――――――――――――――――
-def _boxpanel(ax, param: str, colour_map: dict) -> None:
-    for grp, xpos in zip(["GFP", "TAU"], [0, 1]):
+def _boxpanel(ax, param: str, colour_map: dict, groups: list) -> None:
+    vc_label_added = False
+    positions = list(range(len(groups)))
+    for xpos, grp in enumerate(groups):
         vals = cell_vals.loc[cell_vals["Group"] == grp, param].dropna()
+        if vals.empty:
+            continue
 
         bp = ax.boxplot(vals, positions=[xpos], widths=.55,
                         patch_artist=True, medianprops=dict(color="black"))
@@ -183,7 +199,7 @@ def _boxpanel(ax, param: str, colour_map: dict) -> None:
                    linewidths=.3, alpha=.9)
 
         # VC overlay (single red diamond)
-        if param in ("Rm", "Cm", "Tau") and not vc_grp_mean.empty:
+        if param in ("Rm", "Cm", "Tau") and (grp in vc_grp_mean.index):
             overlay_val = {
                 "Rm" : vc_grp_mean.loc[grp, "Rm_VC"],
                 "Cm" : vc_grp_mean.loc[grp, "Cm_VC"],
@@ -191,11 +207,12 @@ def _boxpanel(ax, param: str, colour_map: dict) -> None:
             }[param]
             ax.scatter(xpos, overlay_val, marker="D", s=70,
                        color=RED, zorder=5,
-                       label="VC mean" if grp == "GFP" else None)
+                       label=None if vc_label_added else "VC mean")
+            vc_label_added = True
 
     _tight_ylim(ax, cell_vals[param])
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels(["Ctrl", "Tau"])
+    ax.set_xticks(positions)
+    ax.set_xticklabels(groups)
     ax.set_ylabel({
         # passive
         "RMP"      : "mV",
@@ -210,18 +227,17 @@ def _boxpanel(ax, param: str, colour_map: dict) -> None:
     }.get(param, ""))
     ax.set_title(param, fontsize=10)
     ax.grid(True, linestyle="--", alpha=.3)
-    if ("VC mean" in ax.get_legend_handles_labels()[1] and
-            not ax.legend_):
-        ax.legend(frameon=False, fontsize=8)
+    if not ax.legend_:
+        handles, labels = ax.get_legend_handles_labels()
+        if labels:
+            ax.legend(frameon=False, fontsize=8)
 
 # ―― Panel D – PASSIVE ―――――――――――――――――――――――――――――――――――――――――――――
 for idx, prm in enumerate(PASSIVE):
-    _boxpanel(fig.add_subplot(gs[1, idx]), prm,
-              {"GFP": DARK_GREEN, "TAU": LIGHT_GREEN})
+    _boxpanel(fig.add_subplot(gs[1, idx]), prm, colour_map, GROUPS)
 
 # ―― Panel E – ACTIVE ―――――――――――――――――――――――――――――――――――――――――――――
 for idx, prm in enumerate(ACTIVE):
-    _boxpanel(fig.add_subplot(gs[2, idx]), prm,
-              {"GFP": DARK_GREEN, "TAU": LIGHT_GREEN})
+    _boxpanel(fig.add_subplot(gs[2, idx]), prm, colour_map, GROUPS)
 
 plt.show()

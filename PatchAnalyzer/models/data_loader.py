@@ -21,30 +21,104 @@ logger = setup_logger(__name__)           # unified logger for the whole file
 # ────────────────────────────────────────────────────────────────────────
 #  Public Section A – metadata CSVs  (UNCHANGED)
 # ────────────────────────────────────────────────────────────────────────
+def _discover_protocol_indices(src_dir: Path) -> list[int]:
+    """
+    Return every integer index that appears in **VoltageProtocol_*.csv**
+    or **CurrentProtocol_*.csv** files under *src_dir*.
+    """
+    indices: set[int] = set()
+
+    vp_dir = src_dir / "VoltageProtocol"
+    if vp_dir.exists():
+        for p in vp_dir.glob("VoltageProtocol_*.csv"):
+            m = re.search(r"VoltageProtocol_(\d+)", p.name)
+            if m:
+                indices.add(int(m.group(1)))
+
+    cp_dir = src_dir / "CurrentProtocol"
+    if cp_dir.exists():
+        for p in cp_dir.glob("CurrentProtocol_*.csv"):
+            m = re.search(r"CurrentProtocol_(\d+)_#", p.name)
+            if m:
+                indices.add(int(m.group(1)))
+
+    return sorted(indices)
+
 def load_metadata(folders: list[Path]) -> pd.DataFrame:
     """
-    Load every *cell_metadata.csv* found in *folders* into one DataFrame,
-    append src_dir + row_idx cols, return the concat result.
+    Load cell-metadata from each acquisition folder.
+
+    Normal path
+    -----------
+    • If *cell_metadata.csv* exists → behave exactly as the original version.
+
+    Fallback path (always on)
+    -------------------------
+    • If the file is missing, scan for **VoltageProtocol_*.csv** and/or
+      **CurrentProtocol_*.csv** files.  Each discovered integer index becomes
+      one synthetic metadata row so ephys data without metadata is still
+      analyzable.
+
+        index           : <protocol index>  (int64)
+        stage_x / y / z : <protocol index>  (float64 dummy coordinates)
+        image           : "cell_<index>.webp"  (keeps `_cell_id` regex working)
+        group_label     : ""   (you may edit later)
+
+    After concatenation, any remaining NaN values are replaced by the empty
+    string so that `QTableWidgetItem` never receives a float('nan'), which
+    Qt cannot construct from.
     """
+    import numpy as np  # local import to avoid new top-level changes
     frames: list[pd.DataFrame] = []
+
     for d in folders:
         meta_csv = find_cell_metadata(d)
-        if not meta_csv:
-            logger.warning("No CellMetadata in %s – skipped", d)
+
+        # ── 1) Normal path: real metadata present ───────────────────────
+        if meta_csv:
+            try:
+                df = pd.read_csv(meta_csv, sep=";")
+                df["src_dir"] = d
+                df["row_idx"] = df.index
+                frames.append(df)
+                logger.info("Loaded %s rows from %s", len(df), meta_csv)
+            except Exception as exc:
+                logger.exception("Failed reading %s: %s", meta_csv, exc)
             continue
-        try:
-            df = pd.read_csv(meta_csv, sep=";")
-            df["src_dir"] = d
-            df["row_idx"] = df.index
-            frames.append(df)
-            logger.info("Loaded %s rows from %s", len(df), meta_csv)
-        except Exception as exc:
-            logger.exception("Failed reading %s: %s", meta_csv, exc)
+
+        # ── 2) Fallback path: discover protocol indices ─────────────────
+        indices = _discover_protocol_indices(d)
+        if not indices:
+            logger.warning(
+                "No CellMetadata and no protocol CSVs in %s – skipped", d
+            )
+            continue
+
+        fake_rows = [{  # synthetic metadata when original CSV is absent
+            "index"      : idx,
+            "stage_x"    : float(idx),
+            "stage_y"    : float(idx),
+            "stage_z"    : float(idx),
+            "image"      : f"cell_{idx}.webp",
+            "group_label": "",
+        } for idx in indices]
+
+        df = pd.DataFrame(fake_rows)
+        df["src_dir"] = d
+        df["row_idx"] = df.index
+        frames.append(df)
+        logger.info("Fallback: created %s synthetic rows for %s", len(df), d)
 
     if not frames:
-        raise ValueError("None of the selected folders contained valid metadata.")
-    return pd.concat(frames, ignore_index=True)
+        raise ValueError(
+            "None of the selected folders contained metadata or protocol CSVs."
+        )
 
+    # ── Combine everything and purge NaNs (Qt dislikes float('nan')) ────
+    meta_df = pd.concat(frames, ignore_index=True)
+    meta_df.replace({np.nan: ""}, inplace=True)
+
+    return meta_df
 
 # ────────────────────────────────────────────────────────────────────────
 #  Public Section B – Ephys CSV loaders  (VERBATIM from *ephys_loader.py*)
