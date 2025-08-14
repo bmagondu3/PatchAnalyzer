@@ -14,8 +14,9 @@ prottype = "holding"
 num_channels = 1
 
 # Folders
-# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\HoldingProtocol\splits"
-csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\CurrentProtocol\temp"
+csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\HoldingProtocol\splits"
+
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\CurrentProtocol\temp"
 # csv_folder = r"c:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\VoltageProtocol\temp"
 out_folder = csv_folder
 os.makedirs(out_folder, exist_ok=True)
@@ -89,13 +90,13 @@ for prefix, paths in groups.items():
          # for some reason, the command is the third column on holding protocol data
 
 
-if num_channels == 1:
-        # write current ABF1 as *_Command.abf
-        cmd_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Command.abf")
-        writeABF1(C_stack, cmd_abf, sample_rate, units=c_unit)
-        print(f"Wrote {len(C_stack)} sweeps → {os.path.basename(cmd_abf)} {in_state}")
+    if num_channels == 1:
+            # write current ABF1 as *_Command.abf
+            cmd_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Command.abf")
+            writeABF1(C_stack, cmd_abf, sample_rate, units=c_unit)
+            print(f"Wrote {len(C_stack)} sweeps → {os.path.basename(cmd_abf)} {in_state}")
 
-        # write voltage ABF1 as *_Response.abf
-        resp_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Response.abf")
-        writeABF1(R_stack, resp_abf, sample_rate, units=r_unit)
-        print(f"Wrote {len(R_stack)} sweeps → {os.path.basename(resp_abf)} {out_state}")
+            # write voltage ABF1 as *_Response.abf
+            resp_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Response.abf")
+            writeABF1(R_stack, resp_abf, sample_rate, units=r_unit)
+            print(f"Wrote {len(R_stack)} sweeps → {os.path.basename(resp_abf)} {out_state}")
