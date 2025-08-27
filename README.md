@@ -16,7 +16,7 @@ The development branch contains the latest features under active development.
 - matplotlib, pyqtgraph
 - scipy
 - pyabf
-
+- scikit-learn
 ## Conda environment
 Create and activate a conda environment named `patchanalyzer` with Python 3.11:
 
@@ -29,7 +29,7 @@ conda activate patchanalyzer
 With the environment active, install the required dependencies:
 
 ```bash
-pip install PyQt5 numpy pandas matplotlib pyqtgraph scipy pyabf
+pip install PyQt5 numpy pandas matplotlib pyqtgraph scipy pyabf scikit-learn
 ```
 
 ## Usage
