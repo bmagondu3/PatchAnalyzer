@@ -13,11 +13,9 @@ V_CLAMP_VOLT_PER_AMP = (1 * 1e-12)    # 1 mV per pA (DAQ input)
 prottype = "holding"
 num_channels = 1
 
-# Folders
-csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\HoldingProtocol\splits"
-
-# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\CurrentProtocol\temp"
-# csv_folder = r"c:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_06_28-14_16\VoltageProtocol\temp"
+# Folders"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\test_holding\control_628"
+csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\test_holding\tau_701"
 out_folder = csv_folder
 os.makedirs(out_folder, exist_ok=True)
 
