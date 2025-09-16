@@ -1,5 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from pathlib import Path
+
+
 
 try:
     from scipy import stats as _stats
@@ -7,6 +11,15 @@ try:
 except Exception:
     _HAVE_SCIPY = False
     from math import erf, sqrt
+
+# Default directory for figure saving; set this once (e.g., from your CSV path).
+_DEFAULT_SAVE_DIR = None
+
+def set_save_dir_from(csv_path: str) -> None:
+    """Make relative figure save paths resolve to the CSV's directory."""
+    global _DEFAULT_SAVE_DIR
+    _DEFAULT_SAVE_DIR = Path(csv_path).resolve().parent
+
 
 # ---------- Style ----------
 def use_prism_style(font_family="DejaVu Sans", base_size=12, axis_linewidth=2.4):
@@ -147,6 +160,8 @@ def plot_ecdf(
     use_prism_style()
     fig = plt.figure(figsize=(6, 4.4))
     ax = fig.add_subplot(111)
+    # Hide top/right spines for cleaner look
+    ax.spines["right"].set_visible(False); ax.spines["top"].set_visible(False)
 
     c = np.asarray(ctrl_values, float)
     e = np.asarray(exp_values, float)
@@ -164,15 +179,35 @@ def plot_ecdf(
     if xs_e.size:
         ax.step(xs_e, yp_e, where="post", linewidth=3.0, color=exp_color, label=exp_label)
 
-    ax.set_xlim(*xlim); ax.set_xticks(list(xticks))
-    ax.set_ylim(*ylim); ax.set_yticks(list(yticks))
+    ax.set_xlim(*xlim)
+    # Auto-pick ticks from 1/2/5 × 10^n (→ 10s/100s/1000s) and end axis at the last tick
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=True, steps=[1, 2, 5, 10]))
+    _xt = ax.get_xticks()
+    if len(_xt):
+        ax.set_xlim(ax.get_xlim()[0], float(_xt[-1]))
+
+    ax.set_ylim(*ylim)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    _yt = ax.get_yticks()
+    if len(_yt):
+        ax.set_ylim(ax.get_ylim()[0], float(_yt[-1]))
+
     ax.set_xlabel(x_label, labelpad=6)
     ax.set_ylabel("Relative frequency (%)", labelpad=6)
-    ax.set_title(title, pad=8)
-    ax.legend(loc="lower right")
+    ax.set_title(title, pad=12)
+    leg = ax.legend(loc="lower right")
+    if leg:
+        # color legend text to match the lines (Ctrl first, then Experimental)
+        for txt, col in zip(leg.get_texts(), [ctrl_color, exp_color]):
+            txt.set_color(col)
+
     fig.tight_layout()
     if savepath:
-        fig.savefig(savepath, bbox_inches="tight")
+        out_path = Path(savepath)
+        if not out_path.is_absolute() and _DEFAULT_SAVE_DIR is not None:
+            out_path = _DEFAULT_SAVE_DIR / out_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, bbox_inches="tight")
     return fig, ax
 
 def plot_box_with_scatter(
@@ -202,6 +237,8 @@ def plot_box_with_scatter(
     use_prism_style()
     fig = plt.figure(figsize=(3.8, 4.4))
     ax = fig.add_subplot(111)
+    # Hide top/right spines so only axes lines remain
+    ax.spines["right"].set_visible(False); ax.spines["top"].set_visible(False)
 
     ctrl_vals = np.asarray(ctrl_summary_values, float)
     exp_vals  = np.asarray(exp_summary_values, float)
@@ -248,19 +285,40 @@ def plot_box_with_scatter(
     # Axes, labels
     ax.set_xlim(0.4, 2.6)
     ax.set_xticks([1, 2], labels=[ctrl_label, exp_label])
-    ax.set_ylim(*ylim); ax.set_yticks(list(yticks))
+    # Color the group labels to match box colors
+    _lbls = ax.get_xticklabels()
+    if len(_lbls) >= 2:
+        _lbls[0].set_color(ctrl_color)
+        _lbls[1].set_color(exp_color)
+
+    ax.set_ylim(*ylim)
+    # whole-number ticks and make the top of the axis match the top tick
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    _ticks = ax.get_yticks()
+    if len(_ticks):
+        ax.set_ylim(ax.get_ylim()[0], float(_ticks[-1]))
     ax.set_ylabel(y_label, labelpad=6)
-    ax.set_title(title, pad=8)
+    ax.set_title(title, pad=40)
+
 
     # n labels (optionally show filtered counts when filter_outliers=True)
     if show_n:
         n1, n2 = len(data[0]), len(data[1])
+        # Place n below the x-axis using blended transform (good spacing)
+        trans = ax.get_xaxis_transform()
+        baseline = -0.12
         if filter_outliers and report_filtered_n:
-            ax.text(1, ax.get_ylim()[0] - 0.06*(ax.get_ylim()[1]-ax.get_ylim()[0]), f"n={n1} (3σ)", ha="center", va="top")
-            ax.text(2, ax.get_ylim()[0] - 0.06*(ax.get_ylim()[1]-ax.get_ylim()[0]), f"n={n2} (3σ)", ha="center", va="top")
+            ax.text(1, baseline, f"n={n1} (3σ)", ha="center", va="top",
+                    transform=trans, clip_on=False, color=ctrl_color)
+            ax.text(2, baseline, f"n={n2} (3σ)", ha="center", va="top",
+                    transform=trans, clip_on=False, color=exp_color)
         else:
-            ax.text(1, ax.get_ylim()[0] - 0.06*(ax.get_ylim()[1]-ax.get_ylim()[0]), f"n={n1}", ha="center", va="top")
-            ax.text(2, ax.get_ylim()[0] - 0.06*(ax.get_ylim()[1]-ax.get_ylim()[0]), f"n={n2}", ha="center", va="top")
+            ax.text(1, baseline, f"n={n1}", ha="center", va="top",
+                    transform=trans, clip_on=False, color=ctrl_color)
+            ax.text(2, baseline, f"n={n2}", ha="center", va="top",
+                    transform=trans, clip_on=False, color=exp_color)
+
+
 
     # Welch t-test + bracket on the (possibly filtered) data
     if len(data[0]) > 0 and len(data[1]) > 0:
@@ -268,14 +326,21 @@ def plot_box_with_scatter(
     else:
         t = df = p = np.nan; stars = "na"
 
-    # Place bracket above max datapoint
-    ymax = np.nanmax([np.max(d) if len(d) else np.nan for d in data]) if any(len(d) for d in data) else ax.get_ylim()[1]
-    y = ymax + 0.1*(ax.get_ylim()[1]-ax.get_ylim()[0])
-    _draw_sig_bracket(ax, 1, 2, y, h=0.06*(ax.get_ylim()[1]-ax.get_ylim()[0]), text=stars)
+    # Place bracket just above highest datapoint, ensure it stays inside the axes (below title)
+
+    y_min, y_max = ax.get_ylim()
+    yr = (y_max - y_min)
+    ymax = np.nanmax([np.max(d) if len(d) else np.nan for d in data]) if any(len(d) for d in data) else y_max
+    _draw_sig_bracket(ax, 1, 2, ymax + 0.06*yr, h=0.015*yr, text=stars)
+
 
     fig.tight_layout()
     if savepath:
-        fig.savefig(savepath, bbox_inches="tight")
+        out_path = Path(savepath)
+        if not out_path.is_absolute() and _DEFAULT_SAVE_DIR is not None:
+            out_path = _DEFAULT_SAVE_DIR / out_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, bbox_inches="tight")
     return fig, ax, {"t": t, "df": df, "p": p, "stars": stars}
 
 # ---------- Synthetic data generators (for testing purposes) ----------
@@ -352,14 +417,20 @@ def parse_interevent_csv(
     # --- Load CSV ---
     df = pd.read_csv(csv_path)
 
-    # Verify required columns exist
-    for col in (filename_col, sheet_col, value_col, mean_col):
+    # Verify required columns exist (mean_col may be absent in newer analyzer outputs)
+    for col in (filename_col, sheet_col):
         if col not in df.columns:
             raise KeyError(f"Required column '{col}' not found in {csv_path}. Present: {list(df.columns)}")
 
-    # Ensure numeric types
+    # Choose a numeric event-values column for ECDF if the default is missing/non-numeric
+    if value_col not in df.columns or not pd.api.types.is_numeric_dtype(df[value_col]):
+        if "interevent_interval" in df.columns:
+            value_col = "interevent_interval"
+        else:
+            raise KeyError(f"Could not locate a numeric event column. Tried '{value_col}'; have: {list(df.columns)}")
+
+    # Ensure numeric types for selected columns
     df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
-    df[mean_col]  = pd.to_numeric(df[mean_col], errors="coerce")
 
     # File id + group classification
     df["_file_id"] = df[filename_col].apply(_extract_numeric_id)
@@ -376,13 +447,37 @@ def parse_interevent_csv(
         ecdf_ctrl_vals = filter_3std(ecdf_ctrl_vals, center=center)
         ecdf_exp_vals  = filter_3std(ecdf_exp_vals, center=center)
 
-    # --- Box/whisker: use provided per-sheet means ---
-    sheet_means = (
-        df.dropna(subset=[mean_col])
-          .groupby([filename_col, sheet_col], as_index=False)[mean_col]
-          .first()
-          .rename(columns={mean_col: "mean_for_sheet"})
-    )
+    # --- Box/whisker: per-sheet means ---
+    # Prefer a precomputed mean column if present (old pipeline),
+    # otherwise compute the mean from event-level columns (new analyzer outputs).
+    if mean_col in df.columns and pd.api.types.is_numeric_dtype(df[mean_col]):
+        sheet_means = (
+            df.dropna(subset=[mean_col])
+              .groupby([filename_col, sheet_col], as_index=False)[mean_col]
+              .first()
+              .rename(columns={mean_col: "mean_for_sheet"})
+        )
+    else:
+        # Map mean_col like "mean_instantaneous_frequency" -> event column "instantaneous_frequency"
+        event_for_mean = None
+        if isinstance(mean_col, str) and mean_col.startswith("mean_"):
+            candidate = mean_col[len("mean_"):]
+            if candidate in df.columns:
+                event_for_mean = candidate
+        if event_for_mean is None:
+            # Default to interevent interval if nothing else is specified/found
+            for cand in ("interevent_interval", "instantaneous_frequency", "peak_amplitude_abs"):
+                if cand in df.columns:
+                    event_for_mean = cand; break
+        if event_for_mean is None:
+            raise KeyError(f"Cannot infer a column to average for per-sheet means. Available: {list(df.columns)}")
+        sheet_means = (
+            df.dropna(subset=[event_for_mean])
+              .groupby([filename_col, sheet_col], as_index=False)[event_for_mean]
+              .mean()
+              .rename(columns={event_for_mean: "mean_for_sheet"})
+        )
+
     # Add group label (based on filename) to the sheet-level table
     sheet_means["_file_id"] = sheet_means[filename_col].apply(_extract_numeric_id)
     sheet_means["_is_exp"]  = sheet_means["_file_id"].apply(is_experimental)
@@ -409,20 +504,57 @@ def parse_interevent_csv(
     }
 
 if __name__ == "__main__":
-    data_path = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\stats\interevent_intervals_by_sheet.csv"
-    data = parse_interevent_csv(data_path)
-    plot_ecdf(
-        data["ecdf_ctrl"], data["ecdf_exp"],
-        ctrl_label="Ctrl", exp_label="Experimental",
-        title="sEPSCs (ECDF)",
-        savepath="example_ecdf.png",
-        filter_outliers=True, center="mean"
-    )
-    plot_box_with_scatter(
-        data["box_ctrl_means"], data["box_exp_means"],
-        y_label="IEI (ms)", title="sEPSCs (means per sheet)",
-        ctrl_label=f"Ctrl (n={data['n_ctrl']})",
-        exp_label=f"Experimental (n={data['n_exp']})",
-        savepath="example_box.png",
-        filter_outliers=True, center="mean", report_filtered_n=True
-    )
+    data_path = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\stats\sEPSCs_by_sheet.csv"
+    set_save_dir_from(data_path)
+    # Generate ECDF + box plots for IEI, instantaneous frequency, and peak amplitude
+    configs = [
+        {"tag": "IEI", "event_col": "interevent_interval", "label": "IEI (ms)"},
+        {"tag": "InstFreq", "event_col": "instantaneous_frequency", "label": "Instantaneous frequency (Hz)"},
+        {"tag": "PeakAmp", "event_col": "peak_amplitude_abs", "label": "Peak amplitude (abs)"}
+    ]
+
+    for cfg in configs:
+        tag = cfg["tag"]; event_col = cfg["event_col"]; label = cfg["label"]
+        data = parse_interevent_csv(
+            data_path, value_col=event_col, mean_col=f"mean_{event_col}",
+            filter_outliers=True, center="mean"
+        )
+        # Dynamic axis scaling for readability (p99 headroom)
+        import numpy as _np
+        all_events = _np.concatenate([data["ecdf_ctrl"], data["ecdf_exp"]]) if len(data["ecdf_ctrl"]) or len(data["ecdf_exp"]) else _np.array([])
+        if all_events.size:
+            p99 = _np.nanpercentile(all_events, 99)
+            xlim = (0, float(p99 * 1.05))
+            xticks = list(_np.linspace(xlim[0], xlim[1], 6))
+        else:
+            xlim = (0, 1); xticks = [0, 0.5, 1.0]
+
+        fig_ecdf, _ = plot_ecdf(
+            data["ecdf_ctrl"], data["ecdf_exp"],
+            x_label=label, title=f"sEPSCs {tag} (ECDF)",
+            ctrl_label="Ctrl", exp_label="Exp",
+            xlim=xlim, xticks=xticks,
+            savepath=f"ecdf_{tag}.png",
+            filter_outliers=True, center="mean"
+        )
+
+        # Compute y-axis for box plot based on per-sheet means (p95 headroom)
+        all_means = _np.concatenate([data["box_ctrl_means"], data["box_exp_means"]]) if len(data["box_ctrl_means"]) or len(data["box_exp_means"]) else _np.array([])
+        if all_means.size:
+            p95 = _np.nanpercentile(all_means, 95)
+            ymax = float(p95 * 1.15 if p95 > 0 else 1.0)
+            ylim = (0, ymax)
+            yticks = list(_np.linspace(ylim[0], ylim[1], 5))
+        else:
+            ylim = (0, 1); yticks = [0, 0.5, 1.0]
+
+        fig_box, _, stats = plot_box_with_scatter(
+            data["box_ctrl_means"], data["box_exp_means"],
+            y_label=label, title=f"sEPSCs {tag} (means per sheet)",
+            ctrl_label=f"Ctrl (n={data['n_ctrl']})",
+            exp_label=f"Exp (n={data['n_exp']})",
+            ylim=ylim, yticks=yticks,
+            savepath=f"box_{tag}.png",
+            filter_outliers=True, center="mean", report_filtered_n=True
+        )
+        print(f"{tag}: Welch t={stats['t']:.3g}, df={stats['df']:.1f}, p={stats['p']:.3g}")
