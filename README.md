@@ -29,7 +29,7 @@ conda activate patchanalyzer
 With the environment active, install the required dependencies:
 
 ```bash
-pip install PyQt5 numpy pandas matplotlib pyqtgraph scipy pyabf scikit-learn
+pip install PyQt5 numpy pandas matplotlib pyqtgraph scipy pyabf scikit-learn pandas
 ```
 
 ## Usage

@@ -3,8 +3,16 @@ import os
 from pathlib import Path
 
 # === CONFIG ===
-# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_28-14_16\HoldingProtocol"  # Change to your directory
-directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\2025_07_01-13_25\HoldingProtocol"
+# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_25-15_58\HoldingProtocol"
+# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_28-14_16\HoldingProtocol"
+# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_28-17_59\HoldingProtocol"
+# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_29-12_42\HoldingProtocol"
+# directory  = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_29-15_14\HoldingProtocol"
+# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_29-16_56\HoldingProtocol"
+# directory  = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_30-13_46\HoldingProtocol"
+# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_01-13_25\HoldingProtocol"
+# directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_01-13_25\HoldingProtocol"
+directory = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_02-13_09\HoldingProtocol"
 num_splits =  3 # Change to how many equal splits you want
 has_header = False  # Set to True if the CSV has a header line to repeat in each split
 # ==============

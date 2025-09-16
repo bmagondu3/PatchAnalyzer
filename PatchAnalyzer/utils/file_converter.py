@@ -11,11 +11,19 @@ V_CLAMP_VOLT_PER_VOLT = (1 * 1e-3)  # 1 mV per V (DAQ output)
 V_CLAMP_VOLT_PER_AMP = (1 * 1e-12)    # 1 mV per pA (DAQ input)
 
 prottype = "holding"
-num_channels = 1
 
-# Folders"
-# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\test_holding\control_628"
-csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Test\test_holding\tau_701"
+# Folders
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_25-15_58\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_28-14_16\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_28-17_59\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_29-12_42\HoldingProtocol"
+# csv_folder  = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_29-15_14\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_29-16_56\HoldingProtocol"
+# csv_folder  = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_30-13_46\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_01-13_25\HoldingProtocol"
+csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_02-13_09\HoldingProtocol"
+
+
 out_folder = csv_folder
 os.makedirs(out_folder, exist_ok=True)
 
@@ -88,13 +96,12 @@ for prefix, paths in groups.items():
          # for some reason, the command is the third column on holding protocol data
 
 
-    if num_channels == 1:
-            # write current ABF1 as *_Command.abf
-            cmd_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Command.abf")
-            writeABF1(C_stack, cmd_abf, sample_rate, units=c_unit)
-            print(f"Wrote {len(C_stack)} sweeps → {os.path.basename(cmd_abf)} {in_state}")
+    # write current ABF1 as *_Command.abf
+    cmd_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Command.abf")
+    writeABF1(C_stack, cmd_abf, sample_rate, units=c_unit)
+    print(f"Wrote {len(C_stack)} sweeps → {os.path.basename(cmd_abf)} {in_state}")
 
-            # write voltage ABF1 as *_Response.abf
-            resp_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Response.abf")
-            writeABF1(R_stack, resp_abf, sample_rate, units=r_unit)
-            print(f"Wrote {len(R_stack)} sweeps → {os.path.basename(resp_abf)} {out_state}")
+    # write voltage ABF1 as *_Response.abf
+    resp_abf = os.path.join(out_folder, f"{prefix.rstrip('_')}_Response.abf")
+    writeABF1(R_stack, resp_abf, sample_rate, units=r_unit)
+    print(f"Wrote {len(R_stack)} sweeps → {os.path.basename(resp_abf)} {out_state}")

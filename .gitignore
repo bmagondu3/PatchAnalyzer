@@ -2,3 +2,5 @@
 /PatchAnalyzer/logs
 *.pyc
 /testcode
+example_box.png
+example_ecdf.png
