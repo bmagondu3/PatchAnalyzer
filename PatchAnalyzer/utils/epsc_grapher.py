@@ -417,10 +417,22 @@ def parse_interevent_csv(
     # --- Load CSV ---
     df = pd.read_csv(csv_path)
 
-    # Verify required columns exist (mean_col may be absent in newer analyzer outputs)
-    for col in (filename_col, sheet_col):
-        if col not in df.columns:
-            raise KeyError(f"Required column '{col}' not found in {csv_path}. Present: {list(df.columns)}")
+    # Verify required columns; allow flexible second key ('sheet' or 'cell')
+    if filename_col not in df.columns:
+        raise KeyError(f"Required column '{filename_col}' not found in {csv_path}. Present: {list(df.columns)}")
+
+    if sheet_col not in df.columns:
+        # NEW: minimal compatibility layer — accept common aliases for the per-entity column
+        for alt in ("cell", "Cell", "cell_id", "Cell_ID", "CellID"):
+            if alt in df.columns:
+                sheet_col = alt
+                break
+        else:
+            raise KeyError(
+                f"Required column '{sheet_col}' not found and no alias detected in {csv_path}. "
+                f"Present: {list(df.columns)}"
+            )
+
 
     # Choose a numeric event-values column for ECDF if the default is missing/non-numeric
     if value_col not in df.columns or not pd.api.types.is_numeric_dtype(df[value_col]):
@@ -504,7 +516,8 @@ def parse_interevent_csv(
     }
 
 if __name__ == "__main__":
-    data_path = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\stats\sEPSCs_by_sheet.csv"
+    # data_path = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\stats\sEPSCs_by_sheet.csv"
+    data_path = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\stats\sEPSCs_by_cell.csv"
     set_save_dir_from(data_path)
     # Generate ECDF + box plots for IEI, instantaneous frequency, and peak amplitude
     configs = [
@@ -531,7 +544,7 @@ if __name__ == "__main__":
 
         fig_ecdf, _ = plot_ecdf(
             data["ecdf_ctrl"], data["ecdf_exp"],
-            x_label=label, title=f"sEPSCs {tag} (ECDF)",
+            x_label=label, title=f"sEPSCs {tag}",
             ctrl_label="Ctrl", exp_label="Exp",
             xlim=xlim, xticks=xticks,
             savepath=f"ecdf_{tag}.png",
@@ -550,7 +563,7 @@ if __name__ == "__main__":
 
         fig_box, _, stats = plot_box_with_scatter(
             data["box_ctrl_means"], data["box_exp_means"],
-            y_label=label, title=f"sEPSCs {tag} (means per sheet)",
+            y_label=label, title=f"sEPSCs {tag}",
             ctrl_label=f"Ctrl (n={data['n_ctrl']})",
             exp_label=f"Exp (n={data['n_exp']})",
             ylim=ylim, yticks=yticks,
