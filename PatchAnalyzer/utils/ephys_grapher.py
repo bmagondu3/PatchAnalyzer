@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 # USER-TWEAKABLE CONSTANTS (kept same defaults)
 # ─────────────────────────────────────────────────────────────────────────────
 CM_SOURCE   = "VOLTAGE"   # "CURRENT" → keep CC Cm;  "VOLTAGE" → prefer VC Cm
-V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_control_cultured_exp\Levi_control_voltage_08625.csv")
-CSV_PATH    = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_control_cultured_exp\Levi_control_current_08625.csv")
+V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_control_cultured_exp\Cohort_2\v_levi_92525.csv")
+CSV_PATH    = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_control_cultured_exp\Cohort_2\c_levi_92525.csv")
 
 BIN_STEP      = 0.5      # pA / pF – bin width for F–I curve
 CM_RANGE      = (20, 500)  # pF      – keep cells with sensible Cm
@@ -56,6 +56,12 @@ def load_vc_data(v_csv_path: Path) -> pd.DataFrame:
         "mean_Cm_pF"       : "Cm_VC",
     })
     vdf["Group"] = vdf["Group"].astype(str).str.upper()
+    numeric_cols = ["Ra_VC", "Rm_VC", "Cm_VC"]
+    for col in numeric_cols:
+        vdf[col] = pd.to_numeric(
+            vdf[col].astype(str).str.replace("'", "", regex=False),
+            errors="coerce",
+        )
     # ----- τ  (τ = Cm × R_parallel) -----------------------------------------
     Ra_ohm = vdf["Ra_VC"] * 1e6
     Rm_ohm = vdf["Rm_VC"] * 1e6
@@ -141,7 +147,7 @@ fig = plt.figure(figsize=(14, 9), constrained_layout=True)
 gs  = fig.add_gridspec(nrows=3, ncols=4, height_ratios=[2, 1, 1])
 
 # ―― PANEL C – F-I curve (group means ± SEM) ――――――――――――――――――――――――――――――
-PLOT_STEPS   = np.arange(-2, 32, 2)               # display only these bins
+PLOT_STEPS   = np.arange(-2, 15,1)               # display only these bins
 total_cells  = cell_vals.groupby("Group")["UID"].nunique()   # overall n
 
 axC = fig.add_subplot(gs[0, 2:4])
