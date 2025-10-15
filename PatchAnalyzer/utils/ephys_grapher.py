@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 # USER-TWEAKABLE CONSTANTS (kept same defaults)
 # ─────────────────────────────────────────────────────────────────────────────
 CM_SOURCE   = "VOLTAGE"   # "CURRENT" → keep CC Cm;  "VOLTAGE" → prefer VC Cm
-V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\v_McEachin_SH-SY5Y.csv")
-CSV_PATH    = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\c_McEachin_SH-SY5Y.csv")
+V_CSV_PATH  = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\results\v_McEachin_SH-SY5Y.csv")
+CSV_PATH    = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\results\c_McEachin_SH-SY5Y.csv")
 
 BIN_STEP      = 2    # pA / pF – bin width for F–I curve
 CM_RANGE      = (20, 500)  # pF      – keep cells with sensible Cm
@@ -250,12 +250,6 @@ axC.set_yticks([0, 2, 4, 6, 8])
 axC.legend(handles, labels, loc="upper left", frameon=False, fontsize=11,
            handlelength=1.4, handletextpad=0.8)
 
-# # ―― Panel D – PASSIVE ―――――――――――――――――――――――――――――――――――――――――――――
-# for idx, prm in enumerate(PASSIVE):
-#     _boxpanel(fig.add_subplot(gs[1, idx]), prm, colour_map, GROUPS)
 
-# # ―― Panel E – ACTIVE ―――――――――――――――――――――――――――――――――――――――――――――
-# for idx, prm in enumerate(ACTIVE):
-#     _boxpanel(fig.add_subplot(gs[2, idx]), prm, colour_map, GROUPS)
 
 plt.show()

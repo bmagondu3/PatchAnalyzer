@@ -19,6 +19,9 @@ except Exception:
 
 _DEFAULT_SAVE_DIR: Path | None = None
 
+CTRL_COLOR = "#2ca02c"
+EXP_COLOR = "black"
+
 
 def set_save_dir_from(csv_path: str) -> None:
     """Make relative figure save paths resolve to the CSV's directory."""
@@ -47,7 +50,6 @@ def use_prism_style(font_family: str = "DejaVu Sans", base_size: int = 12, axis_
             "savefig.dpi": 300,
         }
     )
-
 
 def filter_3std(x: Iterable[float], center: str = "mean") -> np.ndarray:
     """Return values within +/- 3 * STD of the chosen center (mean or median)."""
@@ -161,8 +163,8 @@ def plot_box_with_scatter(
     title: str = "sEPSCs",
     ctrl_label: str = "Ctrl",
     exp_label: str = "Experimental",
-    ctrl_color: str = "#2ca02c",
-    exp_color: str = "black",
+    ctrl_color: str = CTRL_COLOR,
+    exp_color: str = EXP_COLOR,
     ylim: Tuple[float, float] = (0, 400),
     yticks: Tuple[float, ...] = (0, 400, 800, 1200, 1600, 2000),
     whisker_mode: str = "tukey",
@@ -335,9 +337,9 @@ CSV_PATH = Path(
     r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\results\c_McEachin_SH-SY5Y.csv"
 )
 
-BIN_STEP = 0.5  # pA / pF - bin width for F-I curve (kept for parity)
+BIN_STEP = 2  # pA / pF - bin width for F-I curve (matching original)
 CM_RANGE = (20, 500)  # pF - keep cells with sensible Cm
-TAU_MAX = 200  # ms - drop rows with absurd tau
+TAU_MAX = 2000  # ms - drop rows with absurd tau
 I_RATIO_MAX = 60  # pA / pF - truncate extreme x-axis values
 
 PASSIVE_PARAMS = ["RMP", "Tau", "Rm", "Rm_VC", "Cm", "Ra"]
@@ -386,6 +388,7 @@ def load_cc_data(csv_path: Path) -> pd.DataFrame:
         }
     )
     df["Group"] = df["Group"].astype(str).str.upper()
+    df["FiringRate"] = pd.to_numeric(df["FiringRate"], errors="coerce").fillna(0.0)
     df["Rm"] = df["Rm"] * 100.0  # convert MOhm to the corrected scale
     df["Cm"] = df["Cm"] / 100.0  # convert pF to the corrected scale
     return df
@@ -425,7 +428,7 @@ def prepare_cell_means(
     tau_max: float = TAU_MAX,
     i_ratio_max: float = I_RATIO_MAX,
     bin_step: float = BIN_STEP,
-) -> Tuple[pd.DataFrame, List[str]]:
+) -> Tuple[pd.DataFrame, List[str], pd.DataFrame, pd.Series]:
     cc_df = load_cc_data(cc_csv)
     vc_df = load_vc_data(vc_csv)
 
@@ -460,7 +463,18 @@ def prepare_cell_means(
         cell_means[mean_col] = cell_means[param].astype(float)
 
     groups = sorted(cell_means["Group"].dropna().unique().tolist())
-    return cell_means, groups
+    cell_avg = (
+        cc_df.groupby(["UID", "Group", "I_bin"], as_index=False)["FiringRate"]
+        .mean()
+    )
+    fi_stats = (
+        cell_avg.groupby(["Group", "I_bin"])["FiringRate"]
+        .agg(mean="mean", sd="std", n="count")
+        .reset_index()
+    )
+    fi_stats["sem"] = fi_stats["sd"] / np.sqrt(fi_stats["n"])
+    total_cells = cell_means.groupby("Group")["UID"].nunique()
+    return cell_means, groups, fi_stats, total_cells
 
 
 def _combined_values(arrays: Iterable[np.ndarray]) -> np.ndarray:
@@ -545,13 +559,144 @@ def save_param_plot(
     return stats
 
 
+def plot_firing_curve(
+    fi_stats: pd.DataFrame,
+    groups: List[str],
+    total_cells: pd.Series,
+    savepath: str | None = None,
+    plot_steps: Iterable[float] | None = None,
+) -> Tuple[plt.Figure, plt.Axes]:
+    """GraphPad-style firing curve (mean ± SEM) grouped by current bin."""
+    if plot_steps is None:
+        plot_steps = np.arange(0, 14, 2)
+
+    plt.rcParams.update(
+        {
+            "font.family": "Arial",
+            "axes.labelsize": 12,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "axes.linewidth": 1.6,
+        }
+    )
+    fig = plt.figure(figsize=(4.6, 4.0))
+    ax = fig.add_subplot(111)
+
+    for side in ("right", "top"):
+        ax.spines[side].set_visible(False)
+
+    PRISM_MAGENTA = "#C65A8E"
+    PRISM_BLACK = "#000000"
+    PRISM_LINE_LW = 2.4
+    PRISM_MARKER_SIZE = 8.0
+    PRISM_MARKER_EDGE = 2.1
+    PRISM_CAP_SIZE = 5
+    PRISM_CAP_THICKNESS = 1.8
+    PRISM_TICK_LENGTH = 8
+    PRISM_TICK_WIDTH = 1.8
+    PRISM_TICK_PAD = 6
+
+    ax.spines["left"].set_linewidth(PRISM_TICK_WIDTH)
+    ax.spines["bottom"].set_linewidth(PRISM_TICK_WIDTH)
+    ax.tick_params(
+        direction="out",
+        width=PRISM_TICK_WIDTH,
+        length=PRISM_TICK_LENGTH,
+        pad=PRISM_TICK_PAD,
+    )
+
+    legend_override = {"CTRL": "Ctrl", "CONTROL": "Ctrl", "HAPP": "hAPP"}
+    handles, labels = [], []
+    steps = np.array(list(plot_steps), dtype=float)
+    palette: Dict[str, str] = {}
+    if groups:
+        palette[groups[0]] = CTRL_COLOR
+    if len(groups) > 1:
+        palette[groups[1]] = EXP_COLOR
+
+    def _resolve_colour(name: str) -> str:
+        upper = str(name).upper()
+        if name in palette:
+            return palette[name]
+        if any(tag in upper for tag in ("APP", "HAPP")):
+            return PRISM_MAGENTA
+        if any(tag in upper for tag in ("CTRL", "CONTROL", "CTR", "CTL", "WT")):
+            return PRISM_BLACK
+        return "#333333"
+
+    for group in groups:
+        group_rows = fi_stats.loc[
+            (fi_stats["Group"] == group) & (fi_stats["I_bin"].isin(steps))
+        ].copy()
+        if group_rows.empty:
+            continue
+
+        group_rows = group_rows.sort_values("I_bin")
+        x = group_rows["I_bin"].to_numpy(dtype=float)
+        y = group_rows["mean"].to_numpy(dtype=float)
+        sem = group_rows["sem"].fillna(0.0).to_numpy(dtype=float)
+
+        colour = _resolve_colour(group)
+        grp_upper = str(group).upper()
+        if group in palette:
+            marker_face = "white"
+        elif any(tag in grp_upper for tag in ("CTRL", "CONTROL", "CTR", "CTL", "WT")):
+            marker_face = "white"
+        else:
+            marker_face = colour
+        err = ax.errorbar(
+            x,
+            y,
+            yerr=sem,
+            fmt="o-",
+            lw=PRISM_LINE_LW,
+            ms=PRISM_MARKER_SIZE,
+            mfc=marker_face,
+            mec=colour,
+            mew=PRISM_MARKER_EDGE,
+            color=colour,
+            elinewidth=PRISM_CAP_THICKNESS,
+            capsize=PRISM_CAP_SIZE,
+            capthick=PRISM_CAP_THICKNESS,
+            solid_capstyle="round",
+        )
+        err.lines[0].set_solid_joinstyle("round")
+        for cap in err[1]:
+            cap.set_color(colour)
+            cap.set_linewidth(PRISM_CAP_THICKNESS)
+
+        legend_label = legend_override.get(str(group).upper(), str(group))
+        n_cells = int(total_cells.get(group, 0))
+        handles.append(err.lines[0])
+        labels.append(f"{legend_label}   n={n_cells}")
+
+    ax.set_xlabel("Current Density (pA/pF)")
+    ax.set_ylabel("AP Frequency (Hz)")
+    ax.set_xlim(0, 16)
+    ax.set_xticks(np.arange(0, 14, 1))
+    ax.set_ylim(0, 8)
+    ax.set_yticks([0, 2, 4, 6, 8])
+    if handles:
+        ax.legend(handles, labels, loc="upper left", frameon=False, fontsize=11, handlelength=1.4, handletextpad=0.8)
+
+    fig.tight_layout()
+    if savepath:
+        out_path = Path(savepath)
+        if not out_path.is_absolute() and _DEFAULT_SAVE_DIR is not None:
+            out_path = _DEFAULT_SAVE_DIR / out_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, bbox_inches="tight")
+
+    return fig, ax
+
+
 def batch_plot_ephys_means(
     cc_csv: Path = CSV_PATH,
     vc_csv: Path = V_CSV_PATH,
     cm_source: str = CM_SOURCE,
     save_dir: Path | None = None,
 ) -> Dict[str, Dict[str, float]]:
-    cell_means, groups = prepare_cell_means(
+    cell_means, groups, fi_stats, total_cells = prepare_cell_means(
         cc_csv=cc_csv,
         vc_csv=vc_csv,
         cm_source=cm_source,
@@ -573,6 +718,20 @@ def batch_plot_ephys_means(
             save_dir=save_dir,
         )
         results[param] = stats
+
+    if save_dir is not None:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        fi_target: str | Path = save_dir / "firing_curve.png"
+    else:
+        fi_target = "firing_curve.png"
+    fig, _ = plot_firing_curve(
+        fi_stats=fi_stats,
+        groups=groups,
+        total_cells=total_cells,
+        savepath=str(fi_target),
+    )
+    plt.close(fig)
+    print(f"FiringCurve: saved to {fi_target}")
     return results
 
 
