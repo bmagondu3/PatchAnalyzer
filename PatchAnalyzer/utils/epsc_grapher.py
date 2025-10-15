@@ -3,70 +3,39 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 from pathlib import Path
 
-
-
 try:
-    from scipy import stats as _stats
-    _HAVE_SCIPY = True
-except Exception:
-    _HAVE_SCIPY = False
-    from math import erf, sqrt
+    from .ephys_grapher2 import (
+        _DEFAULT_SAVE_DIR,
+        filter_3std,
+        plot_box_with_scatter,
+        set_save_dir_from,
+        use_prism_style,
+    )
+except ImportError:
+    import sys
+    from pathlib import Path as _Path
 
-# Default directory for figure saving; set this once (e.g., from your CSV path).
-_DEFAULT_SAVE_DIR = None
+    _file_path = _Path(__file__).resolve()
+    _repo_root = _file_path.parents[2]
+    if str(_repo_root) not in sys.path:
+        sys.path.append(str(_repo_root))
+    try:
+        from PatchAnalyzer.utils.ephys_grapher2 import (
+            _DEFAULT_SAVE_DIR,
+            filter_3std,
+            plot_box_with_scatter,
+            set_save_dir_from,
+            use_prism_style,
+        )
+    except ImportError:
+        from ephys_grapher2 import (
+            _DEFAULT_SAVE_DIR,
+            filter_3std,
+            plot_box_with_scatter,
+            set_save_dir_from,
+            use_prism_style,
+        )
 
-def set_save_dir_from(csv_path: str) -> None:
-    """Make relative figure save paths resolve to the CSV's directory."""
-    global _DEFAULT_SAVE_DIR
-    _DEFAULT_SAVE_DIR = Path(csv_path).resolve().parent
-
-
-# ---------- Style ----------
-def use_prism_style(font_family="DejaVu Sans", base_size=12, axis_linewidth=2.4):
-    """Apply a Prism-like style with heavier axes/ticks."""
-    plt.rcParams.update({
-        "font.family": font_family,
-        "font.size": base_size,
-        "axes.linewidth": axis_linewidth,
-        "axes.edgecolor": "black",
-        "axes.labelcolor": "black",
-        "axes.grid": False,
-        "xtick.direction": "out",
-        "ytick.direction": "out",
-        "xtick.major.width": axis_linewidth,
-        "ytick.major.width": axis_linewidth,
-        "xtick.major.size": 6,
-        "ytick.major.size": 6,
-        "legend.frameon": False,
-        "figure.dpi": 130,
-        "savefig.dpi": 300,
-    })
-
-# ---------- Outlier filtering ----------
-def filter_3std(x, center="mean"):
-    """Return values within ±3×STD of the chosen center (mean or median).
-
-    Parameters
-    ----------
-    x : array-like
-        Input data (NaNs ignored).
-    center : {"mean", "median"}
-        Center used to compute the window. STD is always population from the *unfiltered* data
-        (ddof=1) to match typical stats practice.
-    """
-    x = np.asarray(x, float)
-    x = x[~np.isnan(x)]
-    if x.size == 0:
-        return x
-    if center == "median":
-        mu = np.median(x)
-    else:
-        mu = np.mean(x)
-    sigma = np.std(x, ddof=1) if x.size > 1 else 0.0
-    if sigma == 0.0:
-        return x.copy()
-    lo, hi = mu - 3.0 * sigma, mu + 3.0 * sigma
-    return x[(x >= lo) & (x <= hi)]
 
 # ---------- Helpers ----------
 def ecdf_percent(x, ensure_last_point=True):
@@ -87,53 +56,6 @@ def ecdf_percent(x, ensure_last_point=True):
         xs = np.concatenate([xs, [xs[-1]]])
         y = np.concatenate([y, [100.0]])
     return xs, y
-
-def p_to_stars(p):
-    """Map p-value to GraphPad-style asterisks."""
-    return "****" if p < 1e-4 else ("***" if p < 1e-3 else ("**" if p < 1e-2 else ("*" if p < 5e-2 else "ns")))
-
-def welch_ttest(a, b):
-    """Welch's t-test (unequal variances). Returns t, df, p(two-sided)."""
-    a = np.asarray(a, float); b = np.asarray(b, float)
-    a = a[~np.isnan(a)]; b = b[~np.isnan(b)]
-    if _HAVE_SCIPY:
-        t, p = _stats.ttest_ind(a, b, equal_var=False, nan_policy="omit", alternative="two-sided")
-        va, vb, na, nb = np.var(a, ddof=1), np.var(b, ddof=1), len(a), len(b)
-        df = (va/na + vb/nb)**2 / ((va**2)/(na**2*(na-1)) + (vb**2)/(nb**2*(nb-1)))
-        return float(t), float(df), float(p)
-    # Fallback p-value via normal approximation
-    na, nb = len(a), len(b)
-    ma, mb = np.mean(a), np.mean(b)
-    va, vb = np.var(a, ddof=1), np.var(b, ddof=1)
-    se = np.sqrt(va/na + vb/nb)
-    t = (ma - mb) / se if se != 0 else 0.0
-    df = (va/na + vb/nb)**2 / ((va**2)/(na**2*(na-1)) + (vb**2)/(nb**2*(nb-1))) if na>1 and nb>1 else np.inf
-    z = abs(t); Phi = (1 + erf(z/sqrt(2)))/2.0
-    p = 2 * (1 - Phi)
-    return float(t), float(df), float(p)
-
-def _scatter_with_jitter(ax, x_positions, groups, colors, jitter=0.08, size_pts2=45, edge_lw=1.4):
-    """
-    Jittered open-circle points. size_pts2 is Matplotlib scatter 's' (points^2).
-    """
-    rng = np.random.default_rng(42)
-    for x, g, c in zip(x_positions, groups, colors):
-        if len(g) == 0:
-            continue
-        jittered = x + (rng.random(len(g)) - 0.5) * 2 * jitter
-        ax.scatter(
-            jittered, g,
-            s=size_pts2, marker="o",
-            facecolors="white", edgecolors=c, linewidths=edge_lw,
-            zorder=3
-        )
-
-def _draw_sig_bracket(ax, x1, x2, y, h, text):
-    ax.plot([x1, x1, x2, x2], [y, y+h, y+h, y], color="black", linewidth=2.2, clip_on=False)
-    ax.text((x1 + x2)/2, y + h + 0.02*(ax.get_ylim()[1]-ax.get_ylim()[0]), text,
-            ha="center", va="bottom", fontsize=13)
-
-# ---------- Plots ----------
 def plot_ecdf(
     ctrl_values,
     exp_values,
@@ -210,140 +132,6 @@ def plot_ecdf(
         fig.savefig(out_path, bbox_inches="tight")
     return fig, ax
 
-def plot_box_with_scatter(
-    ctrl_summary_values,
-    exp_summary_values,
-    y_label="IEI (ms)",
-    title="sEPSCs",
-    ctrl_label="Ctrl",
-    exp_label="Experimental",
-    exp_color="#2ca02c",
-    ctrl_color="black",
-    ylim=(0, 400),
-    yticks=(0, 400, 800,1200,1600, 2000),
-    whisker_mode="tukey",  # or "minmax"
-    show_n=True,
-    savepath=None,
-    # NEW: outlier handling
-    filter_outliers=True,
-    center="mean",
-    report_filtered_n=True,
-):
-    """Transparent boxes, open-circle dots, Welch t-test + bracket.
-
-    If filter_outliers=True, the t-test and the plotted points/boxes use values filtered by a per-group
-    ±3×STD rule (computed within each group independently).
-    """
-    use_prism_style()
-    fig = plt.figure(figsize=(3.8, 4.4))
-    ax = fig.add_subplot(111)
-    # Hide top/right spines so only axes lines remain
-    ax.spines["right"].set_visible(False); ax.spines["top"].set_visible(False)
-
-    ctrl_vals = np.asarray(ctrl_summary_values, float)
-    exp_vals  = np.asarray(exp_summary_values, float)
-    ctrl_vals = ctrl_vals[~np.isnan(ctrl_vals)]
-    exp_vals  = exp_vals[~np.isnan(exp_vals)]
-
-    if filter_outliers:
-        ctrl_vals = filter_3std(ctrl_vals, center=center)
-        exp_vals  = filter_3std(exp_vals, center=center)
-
-    data = [ctrl_vals, exp_vals]
-    colors = [ctrl_color, exp_color]
-    whis = (0, 100) if whisker_mode == "minmax" else 1.5
-
-    bp = ax.boxplot(
-        data, whis=whis, widths=0.5, patch_artist=True, manage_ticks=False,
-        medianprops=dict(color="black", linewidth=3.0),
-        boxprops=dict(linewidth=2.6, facecolor="none"),
-        whiskerprops=dict(linewidth=2.4, color="black"),
-        capprops=dict(linewidth=2.4, color="black"),
-        flierprops=dict(marker="o", markersize=6.5, markerfacecolor="white",
-                        markeredgecolor="black", alpha=1.0),
-    )
-
-    # Group-color edges/lines; keep faces transparent
-    for i, (patch, c) in enumerate(zip(bp["boxes"], colors)):
-        patch.set_facecolor("none")
-        patch.set_edgecolor(c)
-        bp["medians"][i].set_color(c); bp["medians"][i].set_linewidth(3.0)
-        for line in bp["whiskers"][2*i:2*i+2]:
-            line.set_color(c); line.set_linewidth(2.4)
-        for line in bp["caps"][2*i:2*i+2]:
-            line.set_color(c); line.set_linewidth(2.4)
-
-    # Outliers: open circles with colored edges
-    for i, fl in enumerate(bp["fliers"]):
-        fl.set_marker("o"); fl.set_markersize(6.5)
-        fl.set_markerfacecolor("white"); fl.set_markeredgecolor(colors[i])
-        fl.set_alpha(1.0); fl.set_linestyle("none")
-
-    # Raw data: open circles with matched size
-    _scatter_with_jitter(ax, [1, 2], data, colors, jitter=0.08, size_pts2=45, edge_lw=1.4)
-
-    # Axes, labels
-    ax.set_xlim(0.4, 2.6)
-    ax.set_xticks([1, 2], labels=[ctrl_label, exp_label])
-    # Color the group labels to match box colors
-    _lbls = ax.get_xticklabels()
-    if len(_lbls) >= 2:
-        _lbls[0].set_color(ctrl_color)
-        _lbls[1].set_color(exp_color)
-
-    ax.set_ylim(*ylim)
-    # whole-number ticks and make the top of the axis match the top tick
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    _ticks = ax.get_yticks()
-    if len(_ticks):
-        ax.set_ylim(ax.get_ylim()[0], float(_ticks[-1]))
-    ax.set_ylabel(y_label, labelpad=6)
-    ax.set_title(title, pad=40)
-
-
-    # n labels (optionally show filtered counts when filter_outliers=True)
-    if show_n:
-        n1, n2 = len(data[0]), len(data[1])
-        # Place n below the x-axis using blended transform (good spacing)
-        trans = ax.get_xaxis_transform()
-        baseline = -0.12
-        if filter_outliers and report_filtered_n:
-            ax.text(1, baseline, f"n={n1} (3σ)", ha="center", va="top",
-                    transform=trans, clip_on=False, color=ctrl_color)
-            ax.text(2, baseline, f"n={n2} (3σ)", ha="center", va="top",
-                    transform=trans, clip_on=False, color=exp_color)
-        else:
-            ax.text(1, baseline, f"n={n1}", ha="center", va="top",
-                    transform=trans, clip_on=False, color=ctrl_color)
-            ax.text(2, baseline, f"n={n2}", ha="center", va="top",
-                    transform=trans, clip_on=False, color=exp_color)
-
-
-
-    # Welch t-test + bracket on the (possibly filtered) data
-    if len(data[0]) > 0 and len(data[1]) > 0:
-        t, df, p = welch_ttest(data[0], data[1]); stars = p_to_stars(p)
-    else:
-        t = df = p = np.nan; stars = "na"
-
-    # Place bracket just above highest datapoint, ensure it stays inside the axes (below title)
-
-    y_min, y_max = ax.get_ylim()
-    yr = (y_max - y_min)
-    ymax = np.nanmax([np.max(d) if len(d) else np.nan for d in data]) if any(len(d) for d in data) else y_max
-    _draw_sig_bracket(ax, 1, 2, ymax + 0.06*yr, h=0.015*yr, text=stars)
-
-
-    fig.tight_layout()
-    if savepath:
-        out_path = Path(savepath)
-        if not out_path.is_absolute() and _DEFAULT_SAVE_DIR is not None:
-            out_path = _DEFAULT_SAVE_DIR / out_path
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, bbox_inches="tight")
-    return fig, ax, {"t": t, "df": df, "p": p, "stars": stars}
-
-# ---------- Synthetic data generators (for testing purposes) ----------
 def generate_synthetic_iei_event_trains(n_events_ctrl=1000, n_events_exp=1000, seed=7):
     rng = np.random.default_rng(seed)
     ctrl = rng.gamma(shape=2.2, scale=85, size=n_events_ctrl)
