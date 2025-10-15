@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
@@ -81,41 +81,40 @@ def p_to_stars(p: float) -> str:
     return "ns"
 
 
-def welch_ttest(a: Iterable[float], b: Iterable[float]) -> Tuple[float, float, float]:
-    """Welch's t-test (unequal variances). Returns t, df, p(two-sided)."""
+def unpaired_ttest(a: Iterable[float], b: Iterable[float]) -> Tuple[float, float, float]:
+    """Two-tailed unpaired (Student) t-test. Returns t, df, p(two-sided)."""
     arr_a = np.asarray(list(a), dtype=float)
     arr_b = np.asarray(list(b), dtype=float)
     arr_a = arr_a[~np.isnan(arr_a)]
     arr_b = arr_b[~np.isnan(arr_b)]
+    n_a = len(arr_a)
+    n_b = len(arr_b)
+    if n_a == 0 or n_b == 0:
+        return float("nan"), float("nan"), float("nan")
+    df = n_a + n_b - 2
+    if df <= 0:
+        return float("nan"), float(df), float("nan")
+
     if _HAVE_SCIPY:
         t_stat, p_val = _stats.ttest_ind(
             arr_a,
             arr_b,
-            equal_var=False,
+            equal_var=True,
             nan_policy="omit",
             alternative="two-sided",
         )
-        var_a = np.var(arr_a, ddof=1)
-        var_b = np.var(arr_b, ddof=1)
-        n_a = len(arr_a)
-        n_b = len(arr_b)
-        df = (var_a / n_a + var_b / n_b) ** 2 / (
-            (var_a**2) / (n_a**2 * (n_a - 1)) + (var_b**2) / (n_b**2 * (n_b - 1))
-        )
         return float(t_stat), float(df), float(p_val)
 
-    na, nb = len(arr_a), len(arr_b)
-    mean_a, mean_b = float(np.mean(arr_a)), float(np.mean(arr_b))
-    var_a = float(np.var(arr_a, ddof=1))
-    var_b = float(np.var(arr_b, ddof=1))
-    se = np.sqrt(var_a / na + var_b / nb)
-    t_stat = (mean_a - mean_b) / se if se != 0 else 0.0
-    df = (
-        (var_a / na + var_b / nb) ** 2
-        / ((var_a**2) / (na**2 * (na - 1)) + (var_b**2) / (nb**2 * (nb - 1)))
-        if na > 1 and nb > 1
-        else np.inf
-    )
+    mean_a = float(np.mean(arr_a))
+    mean_b = float(np.mean(arr_b))
+    var_a = float(np.var(arr_a, ddof=1)) if n_a > 1 else 0.0
+    var_b = float(np.var(arr_b, ddof=1)) if n_b > 1 else 0.0
+    pooled = ((n_a - 1) * var_a + (n_b - 1) * var_b) / df if df > 0 else 0.0
+    se = np.sqrt(pooled * (1.0 / n_a + 1.0 / n_b))
+    if se == 0.0:
+        return 0.0, float(df), float("nan")
+    t_stat = (mean_a - mean_b) / se
+    # Normal approximation fallback when SciPy is unavailable.
     z = abs(t_stat)
     phi = (1 + erf(z / sqrt(2))) / 2.0
     p_val = 2 * (1 - phi)
@@ -174,7 +173,7 @@ def plot_box_with_scatter(
     center: str = "mean",
     report_filtered_n: bool = True,
 ) -> Tuple[plt.Figure, plt.Axes, Dict[str, float]]:
-    """Transparent boxes, open-circle dots, Welch t-test + bracket."""
+    """Transparent boxes, open-circle dots, unpaired t-test + bracket."""
     use_prism_style()
     fig = plt.figure(figsize=(3.8, 4.4))
     ax = fig.add_subplot(111)
@@ -200,7 +199,10 @@ def plot_box_with_scatter(
         widths=0.5,
         patch_artist=True,
         manage_ticks=False,
-        medianprops=dict(color="black", linewidth=3.0),
+        showmeans=True,
+        meanline=True,
+        medianprops=dict(color="none", linewidth=0.0),
+        meanprops=dict(color="black", linewidth=3.0),
         boxprops=dict(linewidth=2.6, facecolor="none"),
         whiskerprops=dict(linewidth=2.4, color="black"),
         capprops=dict(linewidth=2.4, color="black"),
@@ -216,8 +218,9 @@ def plot_box_with_scatter(
     for idx, (patch, color) in enumerate(zip(bp["boxes"], colors)):
         patch.set_facecolor("none")
         patch.set_edgecolor(color)
-        bp["medians"][idx].set_color(color)
-        bp["medians"][idx].set_linewidth(3.0)
+        if "means" in bp:
+            bp["means"][idx].set_color(color)
+            bp["means"][idx].set_linewidth(3.0)
         for line in bp["whiskers"][2 * idx : 2 * idx + 2]:
             line.set_color(color)
             line.set_linewidth(2.4)
@@ -299,7 +302,7 @@ def plot_box_with_scatter(
             )
 
     if len(data[0]) > 0 and len(data[1]) > 0:
-        t_stat, df, p_val = welch_ttest(data[0], data[1])
+        t_stat, df, p_val = unpaired_ttest(data[0], data[1])
         stars = p_to_stars(p_val)
     else:
         t_stat = df = p_val = np.nan
@@ -323,7 +326,14 @@ def plot_box_with_scatter(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, bbox_inches="tight")
 
-    return fig, ax, {"t": t_stat, "df": df, "p": p_val, "stars": stars}
+    return fig, ax, {
+        "t": t_stat,
+        "df": df,
+        "p": p_val,
+        "stars": stars,
+        "n_ctrl": len(data[0]),
+        "n_exp": len(data[1]),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +438,7 @@ def prepare_cell_means(
     tau_max: float = TAU_MAX,
     i_ratio_max: float = I_RATIO_MAX,
     bin_step: float = BIN_STEP,
-) -> Tuple[pd.DataFrame, List[str], pd.DataFrame, pd.Series]:
+) -> Tuple[pd.DataFrame, List[str], pd.DataFrame, pd.Series, pd.DataFrame]:
     cc_df = load_cc_data(cc_csv)
     vc_df = load_vc_data(vc_csv)
 
@@ -452,6 +462,26 @@ def prepare_cell_means(
     cc_df = cc_df[cc_df["I_norm"].between(-5.0, i_ratio_max)].copy()
     cc_df["I_bin"] = (cc_df["I_norm"] / bin_step).round() * bin_step
 
+    cell_means_initial = (
+        cc_df.groupby(["UID", "Group"], as_index=False)[list(PASSIVE_PARAMS)]
+        .mean()
+        .astype({param: float for param in PASSIVE_PARAMS})
+    )
+
+    passive_cols = [param for param in PASSIVE_PARAMS if param in cell_means_initial.columns]
+    excluded_uids: set[str] = set()
+    if passive_cols:
+        passive_vals = cell_means_initial[passive_cols]
+        col_means = passive_vals.mean()
+        col_stds = passive_vals.std(ddof=0).replace(0.0, np.nan)
+        z_scores = (passive_vals - col_means) / col_stds
+        outlier_mask = z_scores.abs() > 3.0
+        excluded_uids = set(
+            cell_means_initial.loc[outlier_mask.any(axis=1), "UID"].astype(str).tolist()
+        )
+    if excluded_uids:
+        cc_df = cc_df[~cc_df["UID"].astype(str).isin(excluded_uids)].copy()
+
     cell_means = (
         cc_df.groupby(["UID", "Group"], as_index=False)[list(ALL_PARAMS)]
         .mean()
@@ -474,7 +504,7 @@ def prepare_cell_means(
     )
     fi_stats["sem"] = fi_stats["sd"] / np.sqrt(fi_stats["n"])
     total_cells = cell_means.groupby("Group")["UID"].nunique()
-    return cell_means, groups, fi_stats, total_cells
+    return cell_means, groups, fi_stats, total_cells, cell_avg
 
 
 def _combined_values(arrays: Iterable[np.ndarray]) -> np.ndarray:
@@ -555,8 +585,192 @@ def save_param_plot(
     )
 
     plt.close(fig)
-    print(f"{param}: Welch t={stats['t']:.3g}, df={stats['df']:.1f}, p={stats['p']:.3g}")
+    print(f"{param}: unpaired t={stats['t']:.3g}, df={stats['df']:.1f}, p={stats['p']:.3g}")
     return stats
+
+
+def _two_way_anova(
+    data: pd.DataFrame,
+    group_col: str,
+    current_col: str,
+    value_col: str,
+) -> Dict[str, float]:
+    """Compute two-way ANOVA (between groups) and summarise the result."""
+    empty_result = {
+        "df_group": float("nan"),
+        "df_current": float("nan"),
+        "df_interaction": float("nan"),
+        "df_error": float("nan"),
+        "F_group": float("nan"),
+        "F_current": float("nan"),
+        "F_interaction": float("nan"),
+        "p_group": float("nan"),
+        "p_current": float("nan"),
+        "p_interaction": float("nan"),
+        "n": 0,
+    }
+    if data is None or data.empty:
+        return empty_result
+
+    clean = data[[group_col, current_col, value_col]].dropna().copy()
+    if clean.empty:
+        return empty_result
+
+    clean[group_col] = clean[group_col].astype(str)
+    clean[current_col] = clean[current_col].astype(float)
+    clean[value_col] = clean[value_col].astype(float)
+
+    overall_mean = float(clean[value_col].mean())
+    group_means = clean.groupby(group_col)[value_col].mean()
+    group_counts = clean.groupby(group_col)[value_col].count()
+    current_means = clean.groupby(current_col)[value_col].mean()
+    current_counts = clean.groupby(current_col)[value_col].count()
+    combo_stats = clean.groupby([group_col, current_col])[value_col].agg(["mean", "count"])
+
+    SSA = float(
+        sum(group_counts[g] * (group_means[g] - overall_mean) ** 2 for g in group_means.index)
+    )
+    SSB = float(
+        sum(current_counts[c] * (current_means[c] - overall_mean) ** 2 for c in current_means.index)
+    )
+    SSAB = 0.0
+    for (g, c), row in combo_stats.iterrows():
+        count_gc = float(row["count"])
+        if count_gc == 0.0:
+            continue
+        mean_gc = float(row["mean"])
+        SSAB += count_gc * (
+            mean_gc - group_means[g] - current_means[c] + overall_mean
+        ) ** 2
+
+    combo_means = combo_stats["mean"].rename("combo_mean")
+    merged = clean.merge(
+        combo_means,
+        left_on=[group_col, current_col],
+        right_index=True,
+        how="left",
+    )
+    SSE = float(((merged[value_col] - merged["combo_mean"]) ** 2).sum())
+
+    df_group = max(len(group_means) - 1, 0)
+    df_current = max(len(current_means) - 1, 0)
+    df_interaction = max((len(group_means) - 1) * (len(current_means) - 1), 0)
+    counts = combo_stats["count"].astype(float).to_numpy()
+    if counts.size:
+        df_error = int(np.sum(np.maximum(counts - 1.0, 0.0)))
+    else:
+        df_error = 0
+
+    MSA = SSA / df_group if df_group > 0 else float("nan")
+    MSB = SSB / df_current if df_current > 0 else float("nan")
+    MSAB = SSAB / df_interaction if df_interaction > 0 else float("nan")
+    MSE = SSE / df_error if df_error > 0 else float("nan")
+
+    def _calc_f(ms_effect: float) -> float:
+        if not np.isfinite(ms_effect) or not np.isfinite(MSE) or MSE == 0.0:
+            return float("nan")
+        return ms_effect / MSE
+
+    F_group = _calc_f(MSA)
+    F_current = _calc_f(MSB)
+    F_interaction = _calc_f(MSAB)
+
+    if _HAVE_SCIPY and np.isfinite(F_group) and df_group > 0 and df_error > 0:
+        p_group = float(_stats.f.sf(F_group, df_group, df_error))
+    else:
+        p_group = float("nan")
+    if _HAVE_SCIPY and np.isfinite(F_current) and df_current > 0 and df_error > 0:
+        p_current = float(_stats.f.sf(F_current, df_current, df_error))
+    else:
+        p_current = float("nan")
+    if _HAVE_SCIPY and np.isfinite(F_interaction) and df_interaction > 0 and df_error > 0:
+        p_interaction = float(_stats.f.sf(F_interaction, df_interaction, df_error))
+    else:
+        p_interaction = float("nan")
+
+    return {
+        "df_group": float(df_group),
+        "df_current": float(df_current),
+        "df_interaction": float(df_interaction),
+        "df_error": float(df_error),
+        "F_group": float(F_group),
+        "F_current": float(F_current),
+        "F_interaction": float(F_interaction),
+        "p_group": float(p_group),
+        "p_current": float(p_current),
+        "p_interaction": float(p_interaction),
+        "n": int(len(clean)),
+    }
+
+
+def _sidak_pairwise(
+    data: pd.DataFrame,
+    group_col: str,
+    current_col: str,
+    value_col: str,
+    ordered_groups: Iterable[str] | None = None,
+) -> List[Dict[str, float]]:
+    """Run per-step unpaired t-tests and apply Sidak adjustment."""
+    if data is None or data.empty:
+        return []
+
+    clean = data[[group_col, current_col, value_col]].dropna().copy()
+    if clean.empty:
+        return []
+
+    clean[group_col] = clean[group_col].astype(str)
+    clean[current_col] = clean[current_col].astype(float)
+    clean[value_col] = clean[value_col].astype(float)
+
+    groups = list(dict.fromkeys(ordered_groups)) if ordered_groups else []
+    if not groups:
+        groups = sorted(clean[group_col].unique().tolist())
+    if len(groups) != 2:
+        return []
+
+    step_values = sorted(clean[current_col].unique().tolist())
+    raw_results: List[Dict[str, float]] = []
+    for step in step_values:
+        step_df = clean.loc[clean[current_col] == step]
+        ctrl_vals = step_df.loc[step_df[group_col] == groups[0], value_col].to_numpy(dtype=float)
+        exp_vals = step_df.loc[step_df[group_col] == groups[1], value_col].to_numpy(dtype=float)
+        if ctrl_vals.size == 0 or exp_vals.size == 0:
+            continue
+        t_stat, df, p_raw = unpaired_ttest(ctrl_vals, exp_vals)
+        raw_results.append(
+            {
+                "I_bin": float(step),
+                "t": float(t_stat),
+                "df": float(df),
+                "p_raw": float(p_raw),
+            }
+        )
+
+    valid_p = [res["p_raw"] for res in raw_results if np.isfinite(res["p_raw"])]
+    m = len(valid_p)
+    adjusted: List[Dict[str, float]] = []
+    for res in raw_results:
+        p_raw = res["p_raw"]
+        if not np.isfinite(p_raw):
+            p_adj = float("nan")
+            significant = False
+            stars = "na"
+        else:
+            comparisons = max(m, 1)
+            clipped = min(max(p_raw, 0.0), 1.0)
+            p_adj = 1.0 - (1.0 - clipped) ** comparisons
+            p_adj = min(max(p_adj, 0.0), 1.0)
+            significant = p_adj < 0.05
+            stars = p_to_stars(p_adj)
+        adjusted.append(
+            {
+                **res,
+                "p_sidak": float(p_adj),
+                "significant": bool(significant),
+                "stars": stars,
+            }
+        )
+    return adjusted
 
 
 def plot_firing_curve(
@@ -565,10 +779,15 @@ def plot_firing_curve(
     total_cells: pd.Series,
     savepath: str | None = None,
     plot_steps: Iterable[float] | None = None,
-) -> Tuple[plt.Figure, plt.Axes]:
-    """GraphPad-style firing curve (mean ± SEM) grouped by current bin."""
+    per_cell: pd.DataFrame | None = None,
+) -> Tuple[plt.Figure, plt.Axes, Dict[str, Any]]:
+    """GraphPad-style firing curve (mean +/- SEM) with two-way ANOVA + Sidak stats."""
     if plot_steps is None:
-        plot_steps = np.arange(0, 14, 2)
+        step_list = list(np.arange(0, 14, 2))
+    else:
+        step_list = list(plot_steps)
+    if not step_list:
+        step_list = list(np.arange(0, 14, 2))
 
     plt.rcParams.update(
         {
@@ -607,7 +826,8 @@ def plot_firing_curve(
 
     legend_override = {"CTRL": "Ctrl", "CONTROL": "Ctrl", "HAPP": "hAPP"}
     handles, labels = [], []
-    steps = np.array(list(plot_steps), dtype=float)
+    maxima_by_step: Dict[float, float] = {}
+    steps = np.array(step_list, dtype=float)
     palette: Dict[str, str] = {}
     if groups:
         palette[groups[0]] = CTRL_COLOR
@@ -635,6 +855,10 @@ def plot_firing_curve(
         x = group_rows["I_bin"].to_numpy(dtype=float)
         y = group_rows["mean"].to_numpy(dtype=float)
         sem = group_rows["sem"].fillna(0.0).to_numpy(dtype=float)
+
+        for x_val, mean_val, sem_val in zip(x, y, sem):
+            peak = float(mean_val + sem_val)
+            maxima_by_step[x_val] = max(maxima_by_step.get(x_val, 0.0), peak)
 
         colour = _resolve_colour(group)
         grp_upper = str(group).upper()
@@ -672,12 +896,49 @@ def plot_firing_curve(
 
     ax.set_xlabel("Current Density (pA/pF)")
     ax.set_ylabel("AP Frequency (Hz)")
-    ax.set_xlim(0, 16)
+    ax.set_xlim(0, 13)
     ax.set_xticks(np.arange(0, 14, 1))
     ax.set_ylim(0, 8)
     ax.set_yticks([0, 2, 4, 6, 8])
+
+    stats_out: Dict[str, Any] = {"anova": None, "sidak": []}
+    per_cell_clean: pd.DataFrame | None = None
+    if per_cell is not None and not per_cell.empty:
+        per_cell_clean = per_cell.loc[
+            per_cell["Group"].isin(groups)
+            & per_cell["I_bin"].notna()
+            & per_cell["FiringRate"].notna()
+        ].copy()
+        if not per_cell_clean.empty:
+            stats_out["anova"] = _two_way_anova(per_cell_clean, "Group", "I_bin", "FiringRate")
+            stats_out["sidak"] = _sidak_pairwise(
+                per_cell_clean,
+                "Group",
+                "I_bin",
+                "FiringRate",
+                ordered_groups=groups,
+            )
+
+    ymax_for_text = ax.get_ylim()[1]
+    for result in stats_out["sidak"]:
+        star = result["stars"]
+        if star in ("na", "ns"):
+            continue
+        step = float(result["I_bin"])
+        base_height = maxima_by_step.get(step, 0.0)
+        y_pos = min(base_height + 0.4, ymax_for_text - 0.1)
+        ax.text(step, y_pos, star, ha="center", va="bottom", fontsize=11)
+
     if handles:
-        ax.legend(handles, labels, loc="upper left", frameon=False, fontsize=11, handlelength=1.4, handletextpad=0.8)
+        ax.legend(
+            handles,
+            labels,
+            loc="upper left",
+            frameon=False,
+            fontsize=11,
+            handlelength=1.4,
+            handletextpad=0.8,
+        )
 
     fig.tight_layout()
     if savepath:
@@ -687,7 +948,147 @@ def plot_firing_curve(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, bbox_inches="tight")
 
-    return fig, ax
+    return fig, ax, stats_out
+
+
+def _write_results_csv(
+    results: Dict[str, Any],
+    groups: List[str],
+    save_dir: Path | None = None,
+) -> None:
+    """Serialize statistical summaries (box plots + firing curve) to results.csv."""
+    rows: List[Dict[str, Any]] = []
+    comparison = " vs ".join(groups[:2]) if len(groups) >= 2 else ""
+
+    for param, stats in results.items():
+        if param == "FiringCurve":
+            continue
+        row = {
+            "plot": param,
+            "test": "Unpaired t-test",
+            "comparison": comparison,
+            "step": None,
+            "t": stats.get("t"),
+            "df": stats.get("df"),
+            "p": stats.get("p"),
+            "p_sidak": None,
+            "F": None,
+            "df1": None,
+            "df2": None,
+            "significance": stats.get("stars"),
+            "n_ctrl": stats.get("n_ctrl"),
+            "n_exp": stats.get("n_exp"),
+            "n_total": (
+                stats.get("n_ctrl", 0)
+                + stats.get("n_exp", 0)
+                if stats.get("n_ctrl") is not None and stats.get("n_exp") is not None
+                else None
+            ),
+        }
+        rows.append(row)
+
+    fc_stats = results.get("FiringCurve", {})
+    if isinstance(fc_stats, dict):
+        anova = fc_stats.get("anova")
+        if isinstance(anova, dict) and anova.get("n", 0):
+            rows.extend(
+                [
+                    {
+                        "plot": "FiringCurve",
+                        "test": "Two-way ANOVA",
+                        "comparison": "Group",
+                        "step": None,
+                        "t": None,
+                        "df": None,
+                        "p": anova.get("p_group"),
+                        "p_sidak": None,
+                        "F": anova.get("F_group"),
+                        "df1": anova.get("df_group"),
+                        "df2": anova.get("df_error"),
+                        "significance": p_to_stars(anova.get("p_group", float("nan")))
+                        if np.isfinite(anova.get("p_group", float("nan")))
+                        else "na",
+                        "n_ctrl": None,
+                        "n_exp": None,
+                        "n_total": anova.get("n"),
+                    },
+                    {
+                        "plot": "FiringCurve",
+                        "test": "Two-way ANOVA",
+                        "comparison": "Current",
+                        "step": None,
+                        "t": None,
+                        "df": None,
+                        "p": anova.get("p_current"),
+                        "p_sidak": None,
+                        "F": anova.get("F_current"),
+                        "df1": anova.get("df_current"),
+                        "df2": anova.get("df_error"),
+                        "significance": p_to_stars(anova.get("p_current", float("nan")))
+                        if np.isfinite(anova.get("p_current", float("nan")))
+                        else "na",
+                        "n_ctrl": None,
+                        "n_exp": None,
+                        "n_total": anova.get("n"),
+                    },
+                    {
+                        "plot": "FiringCurve",
+                        "test": "Two-way ANOVA",
+                        "comparison": "Interaction",
+                        "step": None,
+                        "t": None,
+                        "df": None,
+                        "p": anova.get("p_interaction"),
+                        "p_sidak": None,
+                        "F": anova.get("F_interaction"),
+                        "df1": anova.get("df_interaction"),
+                        "df2": anova.get("df_error"),
+                        "significance": p_to_stars(anova.get("p_interaction", float("nan")))
+                        if np.isfinite(anova.get("p_interaction", float("nan")))
+                        else "na",
+                        "n_ctrl": None,
+                        "n_exp": None,
+                        "n_total": anova.get("n"),
+                    },
+                ]
+            )
+
+        sidak = fc_stats.get("sidak")
+        if isinstance(sidak, list):
+            for entry in sidak:
+                rows.append(
+                    {
+                        "plot": "FiringCurve",
+                        "test": "Sidak pairwise",
+                        "comparison": comparison,
+                        "step": entry.get("I_bin"),
+                        "t": entry.get("t"),
+                        "df": entry.get("df"),
+                        "p": entry.get("p_raw"),
+                        "p_sidak": entry.get("p_sidak"),
+                        "F": None,
+                        "df1": None,
+                        "df2": None,
+                        "significance": entry.get("stars"),
+                        "n_ctrl": None,
+                        "n_exp": None,
+                        "n_total": None,
+                    }
+                )
+
+    if not rows:
+        return
+
+    df_out = pd.DataFrame(rows)
+    if save_dir is not None:
+        results_path = save_dir / "results.csv"
+    elif _DEFAULT_SAVE_DIR is not None:
+        results_path = _DEFAULT_SAVE_DIR / "results.csv"
+    else:
+        results_path = Path("results.csv").resolve()
+
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    df_out.to_csv(results_path, index=False)
 
 
 def batch_plot_ephys_means(
@@ -695,8 +1096,8 @@ def batch_plot_ephys_means(
     vc_csv: Path = V_CSV_PATH,
     cm_source: str = CM_SOURCE,
     save_dir: Path | None = None,
-) -> Dict[str, Dict[str, float]]:
-    cell_means, groups, fi_stats, total_cells = prepare_cell_means(
+) -> Dict[str, Any]:
+    cell_means, groups, fi_stats, total_cells, fi_cell = prepare_cell_means(
         cc_csv=cc_csv,
         vc_csv=vc_csv,
         cm_source=cm_source,
@@ -709,7 +1110,7 @@ def batch_plot_ephys_means(
     if save_dir is None:
         set_save_dir_from(str(cc_csv))
 
-    results: Dict[str, Dict[str, float]] = {}
+    results: Dict[str, Any] = {}
     for param in ALL_PARAMS:
         stats = save_param_plot(
             cell_means=cell_means,
@@ -724,14 +1125,18 @@ def batch_plot_ephys_means(
         fi_target: str | Path = save_dir / "firing_curve.png"
     else:
         fi_target = "firing_curve.png"
-    fig, _ = plot_firing_curve(
+    fig, _, fi_curve_stats = plot_firing_curve(
         fi_stats=fi_stats,
         groups=groups,
         total_cells=total_cells,
         savepath=str(fi_target),
+        per_cell=fi_cell,
     )
     plt.close(fig)
     print(f"FiringCurve: saved to {fi_target}")
+    results["FiringCurve"] = fi_curve_stats
+
+    _write_results_csv(results, groups, save_dir)
     return results
 
 
