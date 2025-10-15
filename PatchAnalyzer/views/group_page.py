@@ -47,22 +47,43 @@ class GroupPage(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------  UI
     def _build_ui(self) -> None:
+        """Table on the left; square-framed cell image on the right; buttons below."""
         base = QtWidgets.QVBoxLayout(self)
         base.setContentsMargins(8, 8, 8, 8)
 
-        # ── table ────────────────────────────────────────────────────────
+        # ── top row: table + image ───────────────────────────────────────
+        top = QtWidgets.QHBoxLayout()
+        base.addLayout(top, stretch=1)
+
+        # table (left)
         self.table = QtWidgets.QTableWidget(
             selectionBehavior=QtWidgets.QAbstractItemView.SelectRows,
             selectionMode=QtWidgets.QAbstractItemView.ExtendedSelection,
         )
-        self.table.horizontalHeader().setStretchLastSection(True)
 
-
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)  # ← auto-size every col
+        hdr.setStretchLastSection(False)                                 # ← stop stretching one col
         self.table.setSortingEnabled(True)
+        top.addWidget(self.table, stretch=3)
 
-        base.addWidget(self.table, stretch=1)
 
-        # ── bottom buttons ───────────────────────────────────────────────
+        # image pane (right)
+        self.label_cell = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
+
+        def _square_frame(widget: QtWidgets.QWidget) -> QtWidgets.QFrame:
+            frame = QtWidgets.QFrame()
+            frame.setFrameShape(QtWidgets.QFrame.Box)
+            frame.setLineWidth(1)
+            lay = QtWidgets.QVBoxLayout(frame)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(widget)
+            return frame
+
+        self._img_frame = _square_frame(self.label_cell)
+        top.addWidget(self._img_frame, stretch=1)
+
+        # ── bottom button row (original code, unchanged) ─────────────────
         btn_row = QtWidgets.QHBoxLayout()
         base.addLayout(btn_row)
 
@@ -84,15 +105,14 @@ class GroupPage(QtWidgets.QWidget):
         self.btn_continue.clicked.connect(self._on_continue)
         btn_row.addWidget(self.btn_continue)
 
+
     # ---------------------------------------------------- table population
     _COLS = ["index", "stage_x", "stage_y", "stage_z", "src_dir", "group_label"]
 
     def _populate_table(self) -> None:
         """
-        Show one row per unique (x,y,z) cell.
-
-        • “index” column now lists the **values from the CSV “index” field**
-          (e.g. 0, 1, 2 …) – not the DataFrame row numbers.
+        One row per unique (x, y, z) coordinate.
+        “index” column lists the CSV indices belonging to that cell.
         """
         self.table.setSortingEnabled(False)
 
@@ -105,17 +125,13 @@ class GroupPage(QtWidgets.QWidget):
         for tbl_row, rep_df_idx in enumerate(self._rows):
             rep = self.meta_df.loc[rep_df_idx]
 
-            # all DataFrame row-ids for this coordinate triple
-            df_row_list = self._groups_by_coord[
+            df_idxs = self._groups_by_coord[
                 (rep.stage_x, rep.stage_y, rep.stage_z)
             ]
-            # corresponding *CSV index* values
-            cell_idx_vals = [
-                str(self.meta_df.at[i, "index"]) for i in df_row_list
-            ]
+            csv_idx_vals = [str(self.meta_df.at[i, "index"]) for i in df_idxs]
 
             col_vals = {
-                "index": ", ".join(cell_idx_vals),
+                "index": ", ".join(csv_idx_vals),
                 "stage_x": f"{rep.stage_x:.2f}",
                 "stage_y": f"{rep.stage_y:.2f}",
                 "stage_z": f"{rep.stage_z:.2f}",
@@ -127,6 +143,10 @@ class GroupPage(QtWidgets.QWidget):
                 item = QtWidgets.QTableWidgetItem(col_vals[col])
                 item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
 
+                # save the DF row-id in the first column (UserRole)
+                if col_idx == 0:                      # "index" column
+                    item.setData(QtCore.Qt.UserRole, rep_df_idx)
+
                 if col == "group_label" and col_vals[col]:
                     self._style_group_item(item, col_vals[col])
 
@@ -135,37 +155,33 @@ class GroupPage(QtWidgets.QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
+
+        # hook up selection → image update
+        if self.table.rowCount():
+            self.table.selectRow(0)
+        self.table.selectionModel().selectionChanged.connect(self._on_row_selected)
+        self._on_row_selected()
+
+
    # ----------------------------------------------------------------- label
     def _assign_label(self) -> None:
-        """
-        Prompt for a group label and apply it to every DataFrame row that shares
-        the coordinates of each selected table row.
-        """
+        """Prompt for a group label and apply it to all selected cells."""
         sel_rows = self.table.selectionModel().selectedRows()
         if not sel_rows:
             QtWidgets.QMessageBox.information(
-                self, "Nothing selected", "Select one or more rows first."
-            )
+                self, "Nothing selected", "Select one or more rows first.")
             return
 
-        # ask for label (reuse existing labels if any)
+        # ask for label
         if self._groups:
             label, ok = QtWidgets.QInputDialog.getItem(
-                self,
-                "Group Label",
+                self, "Group Label",
                 "Select an existing label or type a new one:",
-                sorted(self._groups),
-                0,
-                True,
-            )
+                sorted(self._groups), 0, True)
         else:
             label, ok = QtWidgets.QInputDialog.getText(
-                self,
-                "Group Label",
-                "Enter a label:",
-                QtWidgets.QLineEdit.Normal,
-                "",
-            )
+                self, "Group Label", "Enter a label:",
+                QtWidgets.QLineEdit.Normal, "")
         label = label.strip()
         if not ok or not label:
             return
@@ -175,10 +191,11 @@ class GroupPage(QtWidgets.QWidget):
 
         for model_index in sel_rows:
             tbl_row = model_index.row()
-            rep_df_idx = self._rows[tbl_row]
+            df_idx = self.table.item(
+                tbl_row, 0).data(QtCore.Qt.UserRole)   # stored earlier
 
-            # all rows with the same (x,y,z)
-            coord = tuple(self.meta_df.loc[rep_df_idx][["stage_x", "stage_y", "stage_z"]])
+            # all rows with the same (x, y, z)
+            coord = tuple(self.meta_df.loc[df_idx, ["stage_x", "stage_y", "stage_z"]])
             mask = (
                 (self.meta_df["stage_x"] == coord[0]) &
                 (self.meta_df["stage_y"] == coord[1]) &
@@ -190,6 +207,7 @@ class GroupPage(QtWidgets.QWidget):
             item = self.table.item(tbl_row, group_col)
             item.setText(label)
             self._style_group_item(item, label)
+
 
     # ----------------------------------------------------------------- save
     def _save_csv(self) -> None:
@@ -220,3 +238,50 @@ class GroupPage(QtWidgets.QWidget):
         item.setBackground(color)
         item.setForeground(QtGui.QColor("black"))
         item.setTextAlignment(QtCore.Qt.AlignCenter)
+
+    def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
+        """
+        Keep the image square.
+        """
+        max_side = int(self.width() * 0.50)          # ≤ 50 % of total width
+        side = min(self.table.height(), max_side)
+        self._img_frame.setFixedSize(side, side)
+        super().resizeEvent(ev)
+
+
+    # ------------------------------------------------------- image update    
+    def _on_row_selected(self, *_):
+        """Show the cell image for the first selected row."""
+        sel = self.table.selectionModel().selectedRows()
+        if not sel:
+            self._show(self.label_cell, None)
+            return
+
+        tbl_row = sel[0].row()
+        df_idx = self.table.item(
+            tbl_row, self._COLS.index("index")
+        ).data(QtCore.Qt.UserRole)
+
+        rep = self.meta_df.loc[df_idx]
+        img_path = (
+            Path(rep["src_dir"]) / "CellMetadata" / rep["image"]
+            if rep["image"] else None
+        )
+        self._show(self.label_cell, img_path)
+
+
+    def _show(self, lbl: QtWidgets.QLabel, path: Path | None) -> None:
+        """Display *path* in *lbl* (scaled); fall back to “No image”."""
+        lbl.clear()
+        if path and path.exists():
+            pm = QtGui.QPixmap(str(path))
+            if not pm.isNull():
+                lbl.setPixmap(pm.scaled(
+                    lbl.size(),
+                    QtCore.Qt.KeepAspectRatioByExpanding,
+                    QtCore.Qt.SmoothTransformation,
+                ))
+                return
+        lbl.setText("No image")
+
+
