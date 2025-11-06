@@ -19,122 +19,23 @@ except Exception:
 
 _DEFAULT_SAVE_DIR: Path | None = None
 
-# CTRL_COLOR = "#2ca02c"
-CTRL_COLOR = "#003057"
+CTRL_COLOR = "#2ca02c"
 EXP_COLOR = "black"
 
 
-def plot_single_group_box(
-    summary_values: Iterable[float],
-    group_label: str,
-    *,
-    y_label: str = "Value",
-    title: str = "",
-    color: str = CTRL_COLOR,
-    ylim: Tuple[float, float] | None = None,
-    savepath: str | None = None,
-    filter_outliers: bool = True,
-    center: str = "mean",
-    report_filtered_n: bool = True,
-) -> Tuple[plt.Figure, plt.Axes, Dict[str, Any]]:
-    """Single-group convenience plot (no inferential statistics)."""
-    use_prism_style()
-    fig = plt.figure(figsize=(3.2, 4.0))
-    ax = fig.add_subplot(111)
-    ax.spines["right"].set_visible(False)
-    ax.spines["top"].set_visible(False)
+def _generate_group_colors(count: int) -> List[str]:
+    """Return a color palette sized for *count* groups."""
+    base = [CTRL_COLOR, EXP_COLOR]
+    colors: List[str] = []
+    cycle = plt.rcParams.get("axes.prop_cycle", None)
+    extra = cycle.by_key().get("color", []) if cycle is not None else []
 
-    values = np.asarray(list(summary_values), dtype=float)
-    values = values[~np.isnan(values)]
-    original_n = len(values)
-    if filter_outliers and original_n:
-        filtered = filter_3std(values, center=center)
-    else:
-        filtered = values
-
-    if ylim is None:
-        ylim = _compute_ylim([filtered])
-
-    data = filtered if filtered.size else np.array([np.nan])
-    bp = ax.boxplot(
-        [data],
-        positions=[1],
-        widths=0.5,
-        whis=1.5,
-        patch_artist=True,
-        manage_ticks=False,
-        showmeans=True,
-        meanline=True,
-        medianprops=dict(color="none", linewidth=0.0),
-        meanprops=dict(color="black", linewidth=3.0),
-        boxprops=dict(linewidth=2.6, facecolor="none", edgecolor=color),
-        whiskerprops=dict(linewidth=2.4, color=color),
-        capprops=dict(linewidth=2.4, color=color),
-        flierprops=dict(
-            marker="o",
-            markersize=6.5,
-            markerfacecolor="white",
-            markeredgecolor=color,
-            alpha=1.0,
-        ),
-    )
-    if "means" in bp:
-        bp["means"][0].set_color(color)
-        bp["means"][0].set_linewidth(3.0)
-
-    _scatter_with_jitter(ax, [1], [filtered], [color], jitter=0.08, size_pts2=45, edge_lw=1.4)
-
-    ax.set_xlim(0.4, 1.6)
-    ax.set_xticks([1], labels=[group_label])
-    xticklabels = ax.get_xticklabels()
-    if xticklabels:
-        xticklabels[0].set_color(color)
-    ax.set_ylim(*ylim)
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ticks = ax.get_yticks()
-    if len(ticks):
-        lower, _upper = ax.get_ylim()
-        ax.set_ylim(lower, float(ticks[-1]))
-    ax.set_ylabel(y_label, labelpad=6)
-    if title:
-        ax.set_title(title, pad=32)
-
-    if report_filtered_n:
-        trans = ax.get_xaxis_transform()
-        label = f"n={len(filtered)}"
-        if filter_outliers and len(filtered) != original_n:
-            label = f"n={len(filtered)} (3SD)"
-        ax.text(
-            1,
-            -0.12,
-            label,
-            ha="center",
-            va="top",
-            transform=trans,
-            clip_on=False,
-            color=color,
-        )
-
-    fig.tight_layout()
-    if savepath:
-        out_path = Path(savepath)
-        if not out_path.is_absolute() and _DEFAULT_SAVE_DIR is not None:
-            out_path = _DEFAULT_SAVE_DIR / out_path
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, bbox_inches="tight")
-
-    stats = {
-        "test": "Single group",
-        "comparison": group_label,
-        "t": None,
-        "df": None,
-        "p": float("nan"),
-        "stars": "na",
-        "n_ctrl": len(filtered),
-        "n_exp": None,
-        "n_total": len(filtered),
-    }
-    return fig, ax, stats
+    for idx in range(count):
+        if idx < len(base):
+            colors.append(base[idx])
+        else:
+            colors.append(extra[(idx - len(base)) % len(extra)] if extra else CTRL_COLOR)
+    return colors
 
 
 def set_save_dir_from(csv_path: str) -> None:
@@ -270,47 +171,63 @@ def _draw_sig_bracket(ax: plt.Axes, x1: float, x2: float, y: float, h: float, te
 
 
 def plot_box_with_scatter(
-    ctrl_summary_values: Iterable[float],
-    exp_summary_values: Iterable[float],
+    group_values: Iterable[Iterable[float]],
+    group_names: Iterable[str],
     y_label: str = "IEI (ms)",
     title: str = "sEPSCs",
-    ctrl_label: str = "Ctrl",
-    exp_label: str = "Experimental",
-    ctrl_color: str = CTRL_COLOR,
-    exp_color: str = EXP_COLOR,
-    ylim: Tuple[float, float] = (0, 400),
-    yticks: Tuple[float, ...] = (0, 400, 800, 1200, 1600, 2000),
+    colors: Iterable[str] | None = None,
+    ylim: Tuple[float, float] | None = None,
     whisker_mode: str = "tukey",
     show_n: bool = True,
     savepath: str | None = None,
     filter_outliers: bool = True,
     center: str = "mean",
     report_filtered_n: bool = True,
-) -> Tuple[plt.Figure, plt.Axes, Dict[str, float]]:
-    """Transparent boxes, open-circle dots, unpaired t-test + bracket."""
+) -> Tuple[plt.Figure, plt.Axes, Dict[str, Any]]:
+    """Transparent boxes, open-circle dots, and statistical summary for any number of groups."""
+    names = list(group_names)
+    raw_arrays = []
+    original_counts: List[int] = []
+    for values in group_values:
+        arr = np.asarray(list(values), dtype=float)
+        arr = arr[~np.isnan(arr)]
+        raw_arrays.append(arr)
+        original_counts.append(arr.size)
+
+    if not names:
+        names = ["All"]
+    if not raw_arrays:
+        raw_arrays = [np.empty(0, dtype=float)]
+        original_counts = [0]
+
+    processed: List[np.ndarray] = []
+    for arr in raw_arrays:
+        if filter_outliers and arr.size:
+            processed.append(filter_3std(arr, center=center))
+        else:
+            processed.append(arr.copy())
+
+    num_groups = len(processed)
+    palette = list(colors) if colors is not None else _generate_group_colors(num_groups)
+    if len(palette) < num_groups:
+        default_palette = _generate_group_colors(num_groups)
+        palette.extend(default_palette[len(palette):])
+
     use_prism_style()
-    fig = plt.figure(figsize=(3.8, 4.4))
+    fig = plt.figure(figsize=(max(3.8, 1.8 * num_groups), 4.4))
     ax = fig.add_subplot(111)
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
 
-    ctrl_vals = np.asarray(list(ctrl_summary_values), dtype=float)
-    exp_vals = np.asarray(list(exp_summary_values), dtype=float)
-    ctrl_vals = ctrl_vals[~np.isnan(ctrl_vals)]
-    exp_vals = exp_vals[~np.isnan(exp_vals)]
-
-    if filter_outliers:
-        ctrl_vals = filter_3std(ctrl_vals, center=center)
-        exp_vals = filter_3std(exp_vals, center=center)
-
-    data = [ctrl_vals, exp_vals]
-    colors = [ctrl_color, exp_color]
     whis = (0, 100) if whisker_mode == "minmax" else 1.5
+    positions = np.arange(1, num_groups + 1, dtype=float)
+    plot_data = [arr if arr.size else np.array([np.nan]) for arr in processed]
 
     bp = ax.boxplot(
-        data,
+        plot_data,
+        positions=positions,
         whis=whis,
-        widths=0.5,
+        widths=0.6,
         patch_artist=True,
         manage_ticks=False,
         showmeans=True,
@@ -329,36 +246,44 @@ def plot_box_with_scatter(
         ),
     )
 
-    for idx, (patch, color) in enumerate(zip(bp["boxes"], colors)):
+    for idx, (patch, color) in enumerate(zip(bp["boxes"], palette)):
         patch.set_facecolor("none")
         patch.set_edgecolor(color)
         if "means" in bp:
             bp["means"][idx].set_color(color)
             bp["means"][idx].set_linewidth(3.0)
-        for line in bp["whiskers"][2 * idx : 2 * idx + 2]:
+        whisker_slice = slice(2 * idx, 2 * idx + 2)
+        for line in bp["whiskers"][whisker_slice]:
             line.set_color(color)
             line.set_linewidth(2.4)
-        for line in bp["caps"][2 * idx : 2 * idx + 2]:
+        for line in bp["caps"][whisker_slice]:
             line.set_color(color)
             line.set_linewidth(2.4)
 
     for idx, flier in enumerate(bp["fliers"]):
+        color = palette[idx % len(palette)]
         flier.set_marker("o")
         flier.set_markersize(6.5)
         flier.set_markerfacecolor("white")
-        flier.set_markeredgecolor(colors[idx])
+        flier.set_markeredgecolor(color)
         flier.set_alpha(1.0)
         flier.set_linestyle("none")
 
-    _scatter_with_jitter(ax, [1, 2], data, colors, jitter=0.08, size_pts2=45, edge_lw=1.4)
+    _scatter_with_jitter(ax, positions, processed, palette, jitter=0.08, size_pts2=45, edge_lw=1.4)
 
-    ax.set_xlim(0.4, 2.6)
-    ax.set_xticks([1, 2], labels=[ctrl_label, exp_label])
-    labels = ax.get_xticklabels()
-    if len(labels) >= 2:
-        labels[0].set_color(ctrl_color)
-        labels[1].set_color(exp_color)
+    if num_groups == 1:
+        ax.set_xlim(0.4, 1.6)
+    else:
+        padding = 0.6
+        ax.set_xlim(positions[0] - padding, positions[-1] + padding)
 
+    ax.set_xticks(positions)
+    ax.set_xticklabels(names)
+    for label, color in zip(ax.get_xticklabels(), palette):
+        label.set_color(color)
+
+    if ylim is None:
+        ylim = _compute_ylim(processed)
     ax.set_ylim(*ylim)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     ticks = ax.get_yticks()
@@ -369,68 +294,128 @@ def plot_box_with_scatter(
     ax.set_title(title, pad=40)
 
     if show_n:
-        n_ctrl, n_exp = len(data[0]), len(data[1])
         trans = ax.get_xaxis_transform()
-        baseline = -0.12
-        if filter_outliers and report_filtered_n:
+        baseline = -0.12 - max(0, num_groups - 2) * 0.02
+        for x, color, orig, filt in zip(positions, palette, original_counts, [len(arr) for arr in processed]):
+            text = f"n={filt}"
+            if filter_outliers and report_filtered_n and filt != orig:
+                text = f"n={filt} (3SD)"
             ax.text(
-                1,
+                x,
                 baseline,
-                f"n={n_ctrl} (3SD)",
+                text,
                 ha="center",
                 va="top",
                 transform=trans,
                 clip_on=False,
-                color=ctrl_color,
+                color=color,
+                fontsize=10,
             )
-            ax.text(
-                2,
-                baseline,
-                f"n={n_exp} (3SD)",
-                ha="center",
-                va="top",
-                transform=trans,
-                clip_on=False,
-                color=exp_color,
+
+    n_ctrl = len(processed[0]) if num_groups >= 1 else None
+    if num_groups > 2:
+        n_ctrl = None
+    n_exp = len(processed[1]) if num_groups == 2 else None
+
+    stats: Dict[str, Any] = {
+        "test": "No data",
+        "comparison": "",
+        "t": None,
+        "df": None,
+        "F": None,
+        "df1": None,
+        "df2": None,
+        "p": float("nan"),
+        "stars": "na",
+        "group_ns": {name: len(arr) for name, arr in zip(names, processed)},
+        "group_ns_raw": {name: orig for name, orig in zip(names, original_counts)},
+        "n_total": sum(len(arr) for arr in processed),
+        "n_ctrl": n_ctrl,
+        "n_exp": n_exp,
+        "comparisons": [],
+    }
+
+    if stats["n_total"] == 0:
+        stats["test"] = "No data"
+    elif num_groups == 1:
+        stats["test"] = "Single group"
+        stats["comparison"] = names[0]
+    elif num_groups == 2:
+        ctrl_vals, exp_vals = processed
+        if len(ctrl_vals) > 0 and len(exp_vals) > 0:
+            t_stat, df, p_val = unpaired_ttest(ctrl_vals, exp_vals)
+            stars = p_to_stars(p_val)
+        else:
+            t_stat = df = p_val = float("nan")
+            stars = "na"
+        stats.update(
+            {
+                "test": "Unpaired t-test",
+                "comparison": f"{names[0]} vs {names[1]}",
+                "t": t_stat,
+                "df": df,
+                "p": p_val,
+                "stars": stars,
+            }
+        )
+
+        y_min, y_max = ax.get_ylim()
+        y_range = y_max - y_min if np.isfinite(y_max - y_min) else 1.0
+        try:
+            ymax_data = np.nanmax([np.max(arr) for arr in processed if arr.size])
+        except ValueError:
+            ymax_data = y_max
+        if not np.isfinite(ymax_data):
+            ymax_data = y_max
+        _draw_sig_bracket(
+            ax,
+            positions[0],
+            positions[1],
+            ymax_data + 0.06 * y_range,
+            h=0.015 * y_range,
+            text=stars,
+        )
+    else:
+        nonempty = [(name, arr) for name, arr in zip(names, processed) if arr.size]
+        if len(nonempty) >= 2:
+            arrays = [arr for _name, arr in nonempty]
+            total_n = sum(arr.size for arr in arrays)
+            df_between = len(arrays) - 1
+            df_within = total_n - len(arrays)
+            F_stat = float("nan")
+            p_val = float("nan")
+
+            if total_n > len(arrays):
+                if _HAVE_SCIPY:
+                    F_stat, p_val = _stats.f_oneway(*arrays)
+                else:
+                    grand_mean = float(np.concatenate(arrays).mean())
+                    ss_between = sum(arr.size * (float(arr.mean()) - grand_mean) ** 2 for arr in arrays)
+                    ss_within = sum(float(np.square(arr - float(arr.mean())).sum()) for arr in arrays)
+                    if df_between > 0 and df_within > 0 and ss_within > 0.0:
+                        ms_between = ss_between / df_between
+                        ms_within = ss_within / df_within
+                        F_stat = ms_between / ms_within if ms_within > 0 else float("inf")
+                        p_val = float("nan")
+
+            stats.update(
+                {
+                    "test": "One-way ANOVA",
+                    "comparison": "All groups",
+                    "F": F_stat,
+                    "df1": float(df_between),
+                    "df2": float(df_within),
+                    "p": float(p_val),
+                    "stars": p_to_stars(p_val) if np.isfinite(p_val) else "na",
+                }
             )
         else:
-            ax.text(
-                1,
-                baseline,
-                f"n={n_ctrl}",
-                ha="center",
-                va="top",
-                transform=trans,
-                clip_on=False,
-                color=ctrl_color,
+            stats.update(
+                {
+                    "test": "Single group",
+                    "comparison": nonempty[0][0] if nonempty else "",
+                }
             )
-            ax.text(
-                2,
-                baseline,
-                f"n={n_exp}",
-                ha="center",
-                va="top",
-                transform=trans,
-                clip_on=False,
-                color=exp_color,
-            )
-
-    if len(data[0]) > 0 and len(data[1]) > 0:
-        t_stat, df, p_val = unpaired_ttest(data[0], data[1])
-        stars = p_to_stars(p_val)
-    else:
-        t_stat = df = p_val = np.nan
-        stars = "na"
-
-    y_min, y_max = ax.get_ylim()
-    y_range = y_max - y_min
-    has_data = [len(d) > 0 for d in data]
-    ymax = (
-        np.nanmax([np.max(d) if len(d) else np.nan for d in data])
-        if any(has_data)
-        else y_max
-    )
-    _draw_sig_bracket(ax, 1, 2, ymax + 0.06 * y_range, h=0.015 * y_range, text=stars)
 
     fig.tight_layout()
     if savepath:
@@ -440,14 +425,7 @@ def plot_box_with_scatter(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_path, bbox_inches="tight")
 
-    return fig, ax, {
-        "t": t_stat,
-        "df": df,
-        "p": p_val,
-        "stars": stars,
-        "n_ctrl": len(data[0]),
-        "n_exp": len(data[1]),
-    }
+    return fig, ax, stats
 
 
 # ---------------------------------------------------------------------------
@@ -455,15 +433,18 @@ def plot_box_with_scatter(
 # ---------------------------------------------------------------------------
 CM_SOURCE = "VOLTAGE"  # "CURRENT" keeps CC Cm; "VOLTAGE" prefers VC Cm
 V_CSV_PATH = Path(
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\results\v_McEachin_SH-SY5Y.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\vc_levi_wood_injury_1H.csv"
     r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\VC_HEK_EXP.csv"
-    
 )
 CSV_PATH = Path(
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\results\c_McEachin_SH-SY5Y.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\cc_levi_wood_injury_1H.csv"
     r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\CC_HEK_EXP.csv"
 )
 
 BIN_STEP = 2  # pA / pF - bin width for F-I curve (matching original)
-CM_RANGE = (20, 500)  # pF - keep cells with sensible Cm
+CM_RANGE = (20, 50000)  # pF - keep cells with sensible Cm
 TAU_MAX = 2000  # ms - drop rows with absurd tau
 I_RATIO_MAX = 60  # pA / pF - truncate extreme x-axis values
 
@@ -649,24 +630,17 @@ def _compute_ylim(arrays: Iterable[np.ndarray]) -> Tuple[float, float]:
     return lower, upper
 
 
-def _extract_group_arrays(cell_means: pd.DataFrame, param: str, groups: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-    if not groups:
-        raise ValueError("Expected at least one group for plotting.")
-    ctrl_group = groups[0]
-    ctrl_vals = (
-        cell_means.loc[cell_means["Group"] == ctrl_group, f"mean_{param}"]
-        .dropna()
-        .to_numpy(dtype=float)
-    )
-    exp_vals = np.empty(0, dtype=float)
-    if len(groups) >= 2:
-        exp_group = groups[1]
-        exp_vals = (
-            cell_means.loc[cell_means["Group"] == exp_group, f"mean_{param}"]
+def _extract_group_arrays(cell_means: pd.DataFrame, param: str, groups: List[str]) -> List[np.ndarray]:
+    """Return a list of per-group value arrays (empty arrays allowed)."""
+    arrays: List[np.ndarray] = []
+    for grp in groups:
+        vals = (
+            cell_means.loc[cell_means["Group"] == grp, f"mean_{param}"]
             .dropna()
             .to_numpy(dtype=float)
         )
-    return ctrl_vals, exp_vals
+        arrays.append(vals)
+    return arrays
 
 
 def save_param_plot(
@@ -676,49 +650,9 @@ def save_param_plot(
     save_dir: Path | None = None,
 ) -> Dict[str, Any]:
     spec = PARAM_SPECS[param]
-    ctrl_vals, exp_vals = _extract_group_arrays(cell_means, param, groups)
-
-    ctrl_label = groups[0] if groups else "Group 1"
-    exp_label = groups[1] if len(groups) >= 2 else "Group 2"
-
-    # Handle single-group datasets (or missing data in one of the groups).
-    single_group = len(groups) < 2 or ctrl_vals.size == 0 or exp_vals.size == 0
-    if single_group:
-        if ctrl_vals.size == 0 and exp_vals.size > 0:
-            values = exp_vals
-            label = exp_label
-            color = EXP_COLOR
-        else:
-            values = ctrl_vals
-            label = ctrl_label
-            color = CTRL_COLOR
-
-        if save_dir is not None:
-            save_dir.mkdir(parents=True, exist_ok=True)
-            save_target: str | Path = save_dir / spec.filename
-        else:
-            save_target = spec.filename
-
-        fig, _, stats = plot_single_group_box(
-            values,
-            label,
-            y_label=spec.y_label,
-            title=spec.title,
-            color=color,
-            ylim=_compute_ylim([values]),
-            savepath=str(save_target),
-            filter_outliers=True,
-            center="mean",
-            report_filtered_n=True,
-        )
-        plt.close(fig)
-        print(f"{param}: single group (n={stats['n_ctrl']})")
-        return stats
-
-    ylim = _compute_ylim([ctrl_vals, exp_vals])
-
-    ctrl_label_text = f"{ctrl_label} (n={len(ctrl_vals)})"
-    exp_label_text = f"{exp_label} (n={len(exp_vals)})"
+    group_arrays = _extract_group_arrays(cell_means, param, groups)
+    ylim = _compute_ylim(group_arrays)
+    palette = _generate_group_colors(len(group_arrays))
 
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -727,12 +661,11 @@ def save_param_plot(
         save_target = spec.filename
 
     fig, _, stats = plot_box_with_scatter(
-        ctrl_vals,
-        exp_vals,
+        group_arrays,
+        groups,
         y_label=spec.y_label,
         title=spec.title,
-        ctrl_label=ctrl_label_text,
-        exp_label=exp_label_text,
+        colors=palette,
         ylim=ylim,
         savepath=str(save_target),
         filter_outliers=True,
@@ -741,7 +674,23 @@ def save_param_plot(
     )
 
     plt.close(fig)
-    print(f"{param}: unpaired t={stats['t']:.3g}, df={stats['df']:.1f}, p={stats['p']:.3g}")
+    test_name = stats.get("test", "No data")
+    p_val = stats.get("p", float("nan"))
+    if test_name == "Unpaired t-test" and np.isfinite(p_val):
+        print(
+            f"{param}: unpaired t={stats.get('t', float('nan')):.3g}, "
+            f"df={stats.get('df', float('nan')):.1f}, "
+            f"p={p_val:.3g}"
+        )
+    elif test_name == "One-way ANOVA" and np.isfinite(p_val):
+        print(
+            f"{param}: one-way F={stats.get('F', float('nan')):.3g} "
+            f"(df1={stats.get('df1', float('nan')):.1f}, "
+            f"df2={stats.get('df2', float('nan')):.1f}), "
+            f"p={p_val:.3g}"
+        )
+    else:
+        print(f"{param}: {test_name}")
     return stats
 
 
@@ -1054,8 +1003,8 @@ def plot_firing_curve(
     ax.set_ylabel("AP Frequency (Hz)")
     ax.set_xlim(0, 13)
     ax.set_xticks(np.arange(0, 14, 1))
-    ax.set_ylim(0, 8)
-    ax.set_yticks([0, 2, 4, 6, 8])
+    ax.set_ylim(0, 100)
+    ax.set_yticks([0, 20, 40, 60, 80, 100])
 
     stats_out: Dict[str, Any] = {"anova": None, "sidak": []}
     per_cell_clean: pd.DataFrame | None = None
@@ -1117,31 +1066,46 @@ def _write_results_csv(
     comparison = " vs ".join(groups[:2]) if len(groups) >= 2 else ""
 
     for param, stats in results.items():
-        if param == "FiringCurve":
+        if param == "FiringCurve" or not isinstance(stats, dict):
             continue
-        test_name = stats.get("test", "Unpaired t-test")
-        comp_label = stats.get("comparison", comparison)
-        total_n = stats.get("n_total")
-        if total_n is None and stats.get("n_ctrl") is not None and stats.get("n_exp") is not None:
-            total_n = stats.get("n_ctrl", 0) + stats.get("n_exp", 0)
         row = {
             "plot": param,
-            "test": test_name,
-            "comparison": comp_label,
+            "test": stats.get("test"),
+            "comparison": stats.get("comparison", comparison),
             "step": None,
             "t": stats.get("t"),
             "df": stats.get("df"),
             "p": stats.get("p"),
             "p_sidak": None,
-            "F": None,
-            "df1": None,
-            "df2": None,
+            "F": stats.get("F"),
+            "df1": stats.get("df1"),
+            "df2": stats.get("df2"),
             "significance": stats.get("stars"),
             "n_ctrl": stats.get("n_ctrl"),
             "n_exp": stats.get("n_exp"),
-            "n_total": total_n,
+            "n_total": stats.get("n_total"),
         }
         rows.append(row)
+        for comp in stats.get("comparisons", []):
+            rows.append(
+                {
+                    "plot": param,
+                    "test": comp.get("test", row["test"]),
+                    "comparison": comp.get("comparison", row["comparison"]),
+                    "step": None,
+                    "t": comp.get("t"),
+                    "df": comp.get("df"),
+                    "p": comp.get("p"),
+                    "p_sidak": comp.get("p_sidak"),
+                    "F": comp.get("F"),
+                    "df1": comp.get("df1"),
+                    "df2": comp.get("df2"),
+                    "significance": comp.get("stars"),
+                    "n_ctrl": comp.get("n_ctrl"),
+                    "n_exp": comp.get("n_exp"),
+                    "n_total": comp.get("n_total"),
+                }
+            )
 
     fc_stats = results.get("FiringCurve", {})
     if isinstance(fc_stats, dict):

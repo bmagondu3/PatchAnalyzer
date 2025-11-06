@@ -14,6 +14,7 @@ from ..utils.helpers import find_current_image            # image locator
 
 _COL_IDS = [
     "unique_id", "indices", "src_dir", "group_label",
+    "timestamp", "current_hold_pA",
     "mean_rmp", "mean_tau", "mean_rm", "mean_cm",
     "rmp_list", "tau_list", "rm_list", "cm_list",
     "has_cc",
@@ -21,6 +22,7 @@ _COL_IDS = [
 
 _COL_HEADERS = [
     "UID", "Indices", "Source Dir", "Group Label",
+    "Timestamp", "Current Hold (pA)",
     "Mean RMP (mV)", "Mean Tau (ms)",
     "Mean Rm (MΩ)", "Mean Cm (pF)",
     "RMP (list)", "Tau (list)", "Rm (list)", "Cm (list)",
@@ -29,6 +31,7 @@ _COL_HEADERS = [
 
 _SWEEP_COLS = [
     "Cell(UniqueID)", "Index", "coordinates", "Source Dir", "Group Label",
+    "Timestamp", "Current Hold (pA)",
     "Injected current (pA)", "RMP mV", "Tau ms", "Rm (Mohms)", "Cm (pF)",
     "Firing rate (Hz)", "mean AP peak mV", "mean AP hwdt(ms)",
     "threshold", "dV/dt max (mV/s)",
@@ -51,11 +54,28 @@ class CCAnalysisPage(QtWidgets.QWidget):
     def __init__(self, meta_df: pd.DataFrame, parent=None):
         super().__init__(parent)
         self.meta_df = meta_df.reset_index(drop=True)
+        for col in ("timestamp", "current_hold_pA"):
+            if col not in self.meta_df.columns:
+                self.meta_df[col] = ""
         self._cprot = CprotAnalyzer()  # ← NEW: Current Protocol Analyzer
         self._sweep_df: pd.DataFrame = pd.DataFrame(columns=_SWEEP_COLS)
 
         # build cells exactly as in VCAnalysisPage – same UIDs & same image‑derived indices
-        from .VCanalysis_page import _cell_id  # reuse the same helper
+        from .VCanalysis_page import _cell_id, _collapse_column, _format_meta_value  # reuse helpers
+
+        def _index_meta(df: pd.DataFrame) -> dict[int, dict[str, str]]:
+            mapping: dict[int, dict[str, str]] = {}
+            for _, row in df.iterrows():
+                idx = row.get("index")
+                try:
+                    idx_int = int(idx)
+                except (TypeError, ValueError):
+                    continue
+                entry = {}
+                for key in ("timestamp", "current_hold_pA"):
+                    entry[key] = _format_meta_value(row.get(key, ""))
+                mapping[idx_int] = entry
+            return mapping
 
         self._cells: list[dict] = []
         for uid, (coord, sub) in enumerate(
@@ -67,12 +87,16 @@ class CCAnalysisPage(QtWidgets.QWidget):
             image_ids = [i for i in image_ids if i is not None]
             image_ids = sorted(set(image_ids))
 
+            meta_map = _index_meta(sub)
             self._cells.append(dict(
                 unique_id   = uid,
                 coord       = coord,
                 src_dir     = src_dir_path,
                 group_label = sub["group_label"].iloc[0],
                 cell_ids    = image_ids,
+                timestamp   = _collapse_column(sub, "timestamp"),
+                current_hold_pA = _collapse_column(sub, "current_hold_pA"),
+                index_meta  = meta_map,
             ))
 
         self._param_label: pg.TextItem | None = None
@@ -191,6 +215,8 @@ class CCAnalysisPage(QtWidgets.QWidget):
                 "indices": indices_str,
                 "src_dir": cell["src_dir"].name,
                 "group_label": cell["group_label"],
+                "timestamp": cell.get("timestamp", ""),
+                "current_hold_pA": cell.get("current_hold_pA", ""),
                 **{k: "" for k in ("mean_rmp","mean_tau","mean_rm","mean_cm","rmp_list","tau_list","rm_list","cm_list")},
                 "has_cc": "",
             }
@@ -545,12 +571,16 @@ class CCAnalysisPage(QtWidgets.QWidget):
                         thr  = spk["threshold_mV"].mean()
                         dvdt = spk["dvdt_max_mV_per_ms"].mean()
 
+                    meta_info = cell.get("index_meta", {}).get(cell_id, {})
+
                     rows.append({
                         "Cell(UniqueID)"         : cell["unique_id"],
                         "Index"                  : cell_id,
                         "coordinates"            : cell["coord"],
                         "Source Dir"             : cell["src_dir"].name,
                         "Group Label"            : cell["group_label"],
+                        "Timestamp"              : meta_info.get("timestamp", ""),
+                        "Current Hold (pA)"      : meta_info.get("current_hold_pA", ""),
                         "Injected current (pA)"  : amp_pA,
                         "RMP mV"                 : rmp,
                         "Tau ms"                 : tau,

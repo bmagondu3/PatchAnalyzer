@@ -5,7 +5,8 @@ from __future__ import annotations
 #  Standard lib & 3rd-party
 # ────────────────────────────────────────────────────────────────────────
 from pathlib import Path
-import csv, fnmatch, re
+import re
+import csv
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
@@ -18,20 +19,22 @@ from ..utils.helpers import find_cell_metadata
 
 logger = setup_logger(__name__)           # unified logger for the whole file
 
+_OPTIONAL_META_COLS = ("timestamp", "voltage_hold_mV", "current_hold_pA")
+
 # ────────────────────────────────────────────────────────────────────────
 #  Public Section A – metadata CSVs  (UNCHANGED)
 # ────────────────────────────────────────────────────────────────────────
 def _discover_protocol_indices(src_dir: Path) -> list[int]:
     """
-    Return every integer index that appears in **VoltageProtocol_*.csv**
+    Return every integer index that appears in **VoltageProtocol_*.csv**, **MembraneTest_*.csv**,
     or **CurrentProtocol_*.csv** files under *src_dir*.
     """
     indices: set[int] = set()
 
     vp_dir = src_dir / "VoltageProtocol"
     if vp_dir.exists():
-        for p in vp_dir.glob("VoltageProtocol_*.csv"):
-            m = re.search(r"VoltageProtocol_(\d+)", p.name)
+        for p in vp_dir.glob("*.csv"):
+            m = re.search(r"(?:VoltageProtocol|MembraneTest)_(\d+)", p.name)
             if m:
                 indices.add(int(m.group(1)))
 
@@ -78,6 +81,9 @@ def load_metadata(folders: list[Path]) -> pd.DataFrame:
         if meta_csv:
             try:
                 df = pd.read_csv(meta_csv, sep=";")
+                for col in _OPTIONAL_META_COLS:
+                    if col not in df.columns:
+                        df[col] = ""
                 df["src_dir"] = d
                 df["row_idx"] = df.index
                 frames.append(df)
@@ -94,14 +100,17 @@ def load_metadata(folders: list[Path]) -> pd.DataFrame:
             )
             continue
 
-        fake_rows = [{  # synthetic metadata when original CSV is absent
-            "index"      : idx,
-            "stage_x"    : float(idx),
-            "stage_y"    : float(idx),
-            "stage_z"    : float(idx),
-            "image"      : f"cell_{idx}.webp",
-            "group_label": "",
-        } for idx in indices]
+            fake_rows = [{  # synthetic metadata when original CSV is absent
+                "index"          : idx,
+                "stage_x"        : float(idx),
+                "stage_y"        : float(idx),
+                "stage_z"        : float(idx),
+                "image"          : f"cell_{idx}.webp",
+                "group_label"    : "",
+                "timestamp"      : "",
+                "voltage_hold_mV": "",
+                "current_hold_pA": "",
+            } for idx in indices]
 
         df = pd.DataFrame(fake_rows)
         df["src_dir"] = d
@@ -150,12 +159,21 @@ def load_voltage_traces_for_indices(
     if not vp_dir.exists():
         return {}
 
-    patterns = [f"VoltageProtocol_{i}*.csv" for i in indices]
+    wanted = {int(i) for i in indices}
+    if not wanted:
+        return {}
+
+    pattern = re.compile(r"^(?:VoltageProtocol|MembraneTest)_(\d+)", re.IGNORECASE)
     traces: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
     for csv_path in vp_dir.glob("*.csv"):
-        if any(fnmatch.fnmatchcase(csv_path.name, pat) for pat in patterns):
-            traces[csv_path.name] = _read_csv(csv_path)
+        match = pattern.match(csv_path.stem)
+        if not match:
+            continue
+        idx = int(match.group(1))
+        if idx not in wanted:
+            continue
+        traces[csv_path.name] = _read_csv(csv_path)
 
     return traces
 

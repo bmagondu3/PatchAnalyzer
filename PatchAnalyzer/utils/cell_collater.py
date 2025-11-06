@@ -78,10 +78,10 @@ def collate_cell_metadata(
 
 if __name__ == "__main__":
     # >>> Edit this path to point at your experiments root directory <<<
-    ROOT_DIR = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp")
+    ROOT_DIR = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected")
 
     # Optional: set a custom output location/filename, or leave as None to use the default
-    OUTPUT_PATH = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\stats\cell_metadata_aggregated.csv")  # e.g., Path(r"/path/to/save/cell_metadata_aggregated.csv")
+    OUTPUT_PATH = Path(r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\stats\cell_metadata_aggregated.csv")  # e.g., Path(r"/path/to/save/cell_metadata_aggregated.csv")
 
     # If you prefer to only remove underscores (keep dashes), set to False.
     DIGITS_ONLY = True

@@ -14,9 +14,8 @@ def find_cell_metadata(folder: Path) -> Path | None:
 
 def find_voltage_image(folder: Path, cell_image_name: str) -> Path | None:
     """
-    Locate VoltageProtocol_<id>.png (case-insensitive) in *folder*/VoltageProtocol.
-
-    Only that exact pattern is accepted — no extra suffixes.
+    Locate VoltageProtocol_<id>.png or MembraneTest_<id>.png (case-insensitive)
+    in *folder*/VoltageProtocol.
     """
     m = _CELL_RE.search(cell_image_name)
     if not m:
@@ -27,10 +26,12 @@ def find_voltage_image(folder: Path, cell_image_name: str) -> Path | None:
     if not vp_dir.exists():
         return None
 
-    # Case-insensitive exact filename match
-    target = f"voltageprotocol_{cell_id}.png"
+    targets = {
+        f"voltageprotocol_{cell_id}.png",
+        f"membranetest_{cell_id}.png",
+    }
     for f in vp_dir.iterdir():
-        if f.is_file() and f.name.lower() == target:
+        if f.is_file() and f.name.lower() in targets:
             return f
     return None
 

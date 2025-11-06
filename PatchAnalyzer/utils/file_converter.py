@@ -21,7 +21,17 @@ prottype = "holding"
 # csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_29-16_56\HoldingProtocol"
 # csv_folder  = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_06_30-13_46\HoldingProtocol"
 # csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_01-13_25\HoldingProtocol"
-csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_02-13_09\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\2025_07_02-13_09\HoldingProtocol"
+
+# levi injury data
+# csv_folder= r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\2025_10_31-11_29\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\2025_10_31-12_41\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\2025_10_31-14_56\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\2025_10_31-17_58\HoldingProtocol"
+# csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\2025_11_03-12_31\HoldingProtocol"
+csv_folder = r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\2025_11_03-17_04\HoldingProtocol"
+
+
 
 
 out_folder = csv_folder

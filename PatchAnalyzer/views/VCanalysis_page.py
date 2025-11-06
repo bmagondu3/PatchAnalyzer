@@ -1,6 +1,7 @@
 # PatchAnalyzer/views/VCanalysis_page.py
 from __future__ import annotations
 from pathlib import Path
+import numbers
 import re, hashlib
 
 import pandas as pd
@@ -14,14 +15,16 @@ from ..utils.ephys_analyzer import VprotAnalyzer      # NEW import
 
 # ── NEW single source-of-truth for columns ─────────────
 _COL_IDS = [
-    "unique_id", "indices", "src_dir", "group_label",        # ← src_dir added
+    "unique_id", "indices", "src_dir", "group_label",
+    "timestamp", "voltage_hold_mV",
     "mean_ra", "sd_ra", "mean_rm", "sd_rm", "mean_cm", "sd_cm",
     "ra_list", "rm_list", "cm_list",
     "has_vprot",
 ]
 
 _COL_HEADERS = [
-    "UID", "Indices", "Source Dir", "Group Label",           # ← header added
+    "UID", "Indices", "Source Dir", "Group Label",
+    "Timestamp", "Voltage Hold (mV)",
     "Mean Ra (MΩ)", "SD Ra (MΩ)",
     "Mean Rm (MΩ)", "SD Rm (MΩ)",
     "Mean Cm (pF)", "SD Cm (pF)",
@@ -39,6 +42,31 @@ def _cell_id(img_name: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _format_meta_value(val) -> str:
+    if isinstance(val, str):
+        text = val.strip()
+        if not text or text.lower() == "nan":
+            return ""
+        return text
+    if pd.isna(val):
+        return ""
+    if isinstance(val, numbers.Real):
+        value = float(val)
+        return str(int(value)) if value.is_integer() else f"{value:g}"
+    return str(val)
+
+
+def _collapse_column(df: pd.DataFrame, column: str) -> str:
+    if column not in df.columns:
+        return ""
+    seen: list[str] = []
+    for val in df[column]:
+        text = _format_meta_value(val)
+        if text and text not in seen:
+            seen.append(text)
+    return ", ".join(seen)
+
+
 class VCAnalysisPage(QtWidgets.QWidget):
     """Left‑hand cell table  •  Command/Response stacked plots  •  Bottom controls."""
 
@@ -51,6 +79,9 @@ class VCAnalysisPage(QtWidgets.QWidget):
     def __init__(self, meta_df: pd.DataFrame, parent=None):
         super().__init__(parent)
         self.meta_df = meta_df.reset_index(drop=True)
+        for col in ("timestamp", "voltage_hold_mV"):
+            if col not in self.meta_df.columns:
+                self.meta_df[col] = ""
         self._vprot = VprotAnalyzer(step_mV=10.0)
         # ── aggregate identical coordinates → list[cell_ids] ──────────────
         # enumerate → give every cell a persistent UID
@@ -64,6 +95,8 @@ class VCAnalysisPage(QtWidgets.QWidget):
                 src_dir   = Path(sub["src_dir"].iloc[0]),
                 group_label = sub["group_label"].iloc[0],
                 cell_ids  = sorted(cell_ids),
+                timestamp = _collapse_column(sub, "timestamp"),
+                voltage_hold_mV = _collapse_column(sub, "voltage_hold_mV"),
     ))
         # ── add near other instance attrs in __init__
         self._param_label: pg.TextItem | None = None
@@ -152,6 +185,8 @@ class VCAnalysisPage(QtWidgets.QWidget):
                 "indices"    : ", ".join(map(str, cell["cell_ids"])),
                 "src_dir"    : cell["src_dir"].name,          # NEW
                 "group_label": cell["group_label"],
+                "timestamp"  : cell.get("timestamp", ""),
+                "voltage_hold_mV": cell.get("voltage_hold_mV", ""),
                 # empty placeholders – filled after analysis
                 "mean_ra": "", "sd_ra": "", "mean_rm": "", "sd_rm": "",
                 "mean_cm": "", "sd_cm": "",
@@ -389,6 +424,8 @@ class VCAnalysisPage(QtWidgets.QWidget):
                 "stage_z"    : cell["coord"][2],
                 "src_dir"    : cell["src_dir"].name,
                 "group_label": cell["group_label"],
+                "timestamp"  : cell.get("timestamp", ""),
+                "voltage_hold_mV": cell.get("voltage_hold_mV", ""),
                 "mean_Ra_MOhm": cell.get("mean_ra", "–"),
                 "SD_Ra_MOhm"  : cell.get("sd_ra", "–"),
                 "mean_Rm_MOhm": cell.get("mean_rm", "–"),

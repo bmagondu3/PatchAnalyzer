@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 import hashlib
+import numbers
 import pandas as pd
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -27,6 +28,10 @@ class GroupPage(QtWidgets.QWidget):
         self.meta_df = meta_df.copy()
         if "group_label" not in self.meta_df.columns:
             self.meta_df["group_label"] = ""
+
+        for col in ("timestamp", "voltage_hold_mV", "current_hold_pA"):
+            if col not in self.meta_df.columns:
+                self.meta_df[col] = ""
 
         # ── coordinate → list[indices] mapping ───────────────────────────
         self._groups_by_coord: dict[tuple[float, float, float], list[int]] = (
@@ -107,7 +112,44 @@ class GroupPage(QtWidgets.QWidget):
 
 
     # ---------------------------------------------------- table population
-    _COLS = ["index", "stage_x", "stage_y", "stage_z", "src_dir", "group_label"]
+    _COLS = [
+        "index",
+        "stage_x",
+        "stage_y",
+        "stage_z",
+        "src_dir",
+        "timestamp",
+        "voltage_hold_mV",
+        "current_hold_pA",
+        "group_label",
+    ]
+
+    def _format_group_values(self, df_idxs: list[int], column: str) -> str:
+        """Return a comma-separated string of unique, non-empty values for *column*."""
+        if column not in self.meta_df.columns:
+            return ""
+
+        seen: list[str] = []
+        for idx in df_idxs:
+            raw = self.meta_df.at[idx, column]
+
+            if isinstance(raw, str):
+                text = raw.strip()
+                if not text or text.lower() == "nan":
+                    continue
+            else:
+                if pd.isna(raw):
+                    continue
+                if isinstance(raw, numbers.Real):
+                    value = float(raw)
+                    text = str(int(value)) if value.is_integer() else f"{value:g}"
+                else:
+                    text = str(raw)
+
+            if text not in seen:
+                seen.append(text)
+
+        return ", ".join(seen)
 
     def _populate_table(self) -> None:
         """
@@ -117,9 +159,15 @@ class GroupPage(QtWidgets.QWidget):
         self.table.setSortingEnabled(False)
 
         self.table.setColumnCount(len(self._COLS))
-        self.table.setHorizontalHeaderLabels(
-            [c.replace("_", " ").title() for c in self._COLS]
-        )
+        headers = []
+        for col in self._COLS:
+            if col == "voltage_hold_mV":
+                headers.append("Voltage Hold (mV)")
+            elif col == "current_hold_pA":
+                headers.append("Current Hold (pA)")
+            else:
+                headers.append(col.replace("_", " ").title())
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self._rows))
 
         for tbl_row, rep_df_idx in enumerate(self._rows):
@@ -136,6 +184,9 @@ class GroupPage(QtWidgets.QWidget):
                 "stage_y": f"{rep.stage_y:.2f}",
                 "stage_z": f"{rep.stage_z:.2f}",
                 "src_dir": Path(rep["src_dir"]).name,
+                "timestamp": self._format_group_values(df_idxs, "timestamp"),
+                "voltage_hold_mV": self._format_group_values(df_idxs, "voltage_hold_mV"),
+                "current_hold_pA": self._format_group_values(df_idxs, "current_hold_pA"),
                 "group_label": rep["group_label"],
             }
 
