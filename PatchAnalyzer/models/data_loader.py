@@ -100,17 +100,17 @@ def load_metadata(folders: list[Path]) -> pd.DataFrame:
             )
             continue
 
-            fake_rows = [{  # synthetic metadata when original CSV is absent
-                "index"          : idx,
-                "stage_x"        : float(idx),
-                "stage_y"        : float(idx),
-                "stage_z"        : float(idx),
-                "image"          : f"cell_{idx}.webp",
-                "group_label"    : "",
-                "timestamp"      : "",
-                "voltage_hold_mV": "",
-                "current_hold_pA": "",
-            } for idx in indices]
+        fake_rows = [{  # synthetic metadata when original CSV is absent
+            "index"          : idx,
+            "stage_x"        : float(idx),
+            "stage_y"        : float(idx),
+            "stage_z"        : float(idx),
+            "image"          : f"cell_{idx}.webp",
+            "group_label"    : "",
+            "timestamp"      : "",
+            "voltage_hold_mV": "",
+            "current_hold_pA": "",
+        } for idx in indices]
 
         df = pd.DataFrame(fake_rows)
         df["src_dir"] = d

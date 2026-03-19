@@ -19,9 +19,10 @@ except Exception:
 
 _DEFAULT_SAVE_DIR: Path | None = None
 
-# CTRL_COLOR = "#2ca02c"
-CTRL_COLOR = "#003057"
-EXP_COLOR = "black"
+EXP_COLOR = "#969FA7"
+# CTRL_COLOR = "#003057"
+# EXP_COLOR = "#2ca02c"
+CTRL_COLOR ="#2E3B4E"
 
 
 def plot_single_group_box(
@@ -455,11 +456,16 @@ def plot_box_with_scatter(
 # ---------------------------------------------------------------------------
 CM_SOURCE = "VOLTAGE"  # "CURRENT" keeps CC Cm; "VOLTAGE" prefers VC Cm
 V_CSV_PATH = Path(
-    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\VC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\VC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\results\VC_rowan_GFP_TAU_1_14_26.csv"
+    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\vc_levi_wood_injury_1H.csv"
+
     
 )
 CSV_PATH = Path(
-    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\CC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\CC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\results\CC_rowan_GFP_TAU_1_14_26.csv"
+    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\cc_levi_wood_injury_1H.csv"
 )
 
 BIN_STEP = 2  # pA / pF - bin width for F-I curve (matching original)
@@ -1052,10 +1058,10 @@ def plot_firing_curve(
 
     ax.set_xlabel("Current Density (pA/pF)")
     ax.set_ylabel("AP Frequency (Hz)")
-    ax.set_xlim(0, 13)
-    ax.set_xticks(np.arange(0, 14, 1))
+    ax.set_xlim(0, 15)
+    ax.set_xticks(np.arange(0, 16, 1))
     ax.set_ylim(0, 8)
-    ax.set_yticks([0, 2, 4, 6, 8])
+    ax.set_yticks([0, 10, 20, 30, 40, 50, 60, 70, 80])
 
     stats_out: Dict[str, Any] = {"anova": None, "sidak": []}
     per_cell_clean: pd.DataFrame | None = None
