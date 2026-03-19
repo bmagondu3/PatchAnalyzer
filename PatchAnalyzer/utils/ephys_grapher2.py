@@ -458,14 +458,16 @@ CM_SOURCE = "VOLTAGE"  # "CURRENT" keeps CC Cm; "VOLTAGE" prefers VC Cm
 V_CSV_PATH = Path(
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\VC_HEK_EXP.csv"
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\results\VC_rowan_GFP_TAU_1_14_26.csv"
-    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\vc_levi_wood_injury_1H.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\vc_levi_wood_injury_1H.csv"
+    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_APP_TAU_exp\Rowan_APP_TAU_VC.csv"
 
     
 )
 CSV_PATH = Path(
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\CC_HEK_EXP.csv"
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_GFP_TAU_exp\results\CC_rowan_GFP_TAU_1_14_26.csv"
-    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\cc_levi_wood_injury_1H.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\cc_levi_wood_injury_1H.csv"
+    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_APP_TAU_exp\Rowan_APP_TAU_CC.csv"
 )
 
 BIN_STEP = 2  # pA / pF - bin width for F-I curve (matching original)
@@ -1061,7 +1063,7 @@ def plot_firing_curve(
     ax.set_xlim(0, 15)
     ax.set_xticks(np.arange(0, 16, 1))
     ax.set_ylim(0, 8)
-    ax.set_yticks([0, 10, 20, 30, 40, 50, 60, 70, 80])
+    ax.set_yticks([0, 10, 20, 30, 40, 50, 60, 70, 80,90,100])
 
     stats_out: Dict[str, Any] = {"anova": None, "sidak": []}
     per_cell_clean: pd.DataFrame | None = None
