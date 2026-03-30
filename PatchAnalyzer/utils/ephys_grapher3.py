@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,8 +19,8 @@ except Exception:
 
 _DEFAULT_SAVE_DIR: Path | None = None
 
-CTRL_COLOR = "#2ca02c"
-EXP_COLOR = "black"
+CTRL_COLOR = "#2E3B4E"
+EXP_COLOR = "#2ca02c"
 
 
 def _generate_group_colors(count: int) -> List[str]:
@@ -435,12 +435,17 @@ CM_SOURCE = "VOLTAGE"  # "CURRENT" keeps CC Cm; "VOLTAGE" prefers VC Cm
 V_CSV_PATH = Path(
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\results\v_McEachin_SH-SY5Y.csv"
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\vc_levi_wood_injury_1H.csv"
-    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\VC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\VC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_APP_TAU_exp\Rowan_APP_TAU_VC.csv"
+    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_APP_TAU_exp\vc2.csv"
+
 )
 CSV_PATH = Path(
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\McEachin_SH-SY5Y_exp\results\c_McEachin_SH-SY5Y.csv"
     # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Levi_Injury_exp\corrected\cc_levi_wood_injury_1H.csv"
-    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\CC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Forest_HEK_exp\corrected\CC_HEK_EXP.csv"
+    # r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_APP_TAU_exp\Rowan_APP_TAU_CC.csv"
+    r"C:\Users\sa-forest\Documents\GitHub\PatchAnalyzer\Data\Rowan_APP_TAU_exp\cc2.csv"
 )
 
 BIN_STEP = 2  # pA / pF - bin width for F-I curve (matching original)
@@ -449,8 +454,9 @@ TAU_MAX = 2000  # ms - drop rows with absurd tau
 I_RATIO_MAX = 60  # pA / pF - truncate extreme x-axis values
 
 PASSIVE_PARAMS = ["RMP", "Tau", "Rm", "Rm_VC", "Cm", "Ra"]
+VC_PASSIVE_PARAMS = ["Cm_VC"]
 ACTIVE_PARAMS = ["APpeak", "APhwdt", "threshold", "dVdt"]
-ALL_PARAMS: Tuple[str, ...] = tuple(PASSIVE_PARAMS + ACTIVE_PARAMS)
+ALL_PARAMS: Tuple[str, ...] = tuple(PASSIVE_PARAMS + VC_PASSIVE_PARAMS + ACTIVE_PARAMS)
 
 
 @dataclass(frozen=True)
@@ -465,7 +471,8 @@ PARAM_SPECS: Dict[str, ParamSpec] = {
     "Tau": ParamSpec("Membrane tau", "Tau (ms)", "box_Tau.png"),
     "Rm": ParamSpec("Input resistance (CC)", "Input resistance (MOhm)", "box_Rm_CC.png"),
     "Rm_VC": ParamSpec("Membrane resistance (VC)", "Membrane resistance (MOhm)", "box_Rm_VC.png"),
-    "Cm": ParamSpec("Membrane capacitance", "Capacitance (pF)", "box_Cm.png"),
+    "Cm": ParamSpec("Membrane capacitance (CC)", "Capacitance (pF)", "box_Cm_CC.png"),
+    "Cm_VC": ParamSpec("Membrane capacitance (VC)", "Capacitance (pF)", "box_Cm_VC.png"),
     "Ra": ParamSpec("Access resistance", "Access resistance (MOhm)", "box_Ra.png"),
     "APpeak": ParamSpec("AP peak", "AP peak (mV)", "box_APpeak.png"),
     "APhwdt": ParamSpec("AP half-width", "AP half-width (ms)", "box_APhwdt.png"),
@@ -494,9 +501,28 @@ def load_cc_data(csv_path: Path) -> pd.DataFrame:
         }
     )
     df["Group"] = df["Group"].astype(str).str.upper()
-    df["FiringRate"] = pd.to_numeric(df["FiringRate"], errors="coerce").fillna(0.0)
-    df["Rm"] = df["Rm"] * 100.0  # convert MOhm to the corrected scale
-    df["Cm"] = df["Cm"] / 100.0  # convert pF to the corrected scale
+    numeric_cols = ["Iinj", "RMP", "Tau", "Rm", "Cm", "FiringRate", "APpeak", "APhwdt", "threshold", "dVdt"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["FiringRate"] = df["FiringRate"].fillna(0.0)
+
+    # Only apply the old CC unit correction when the file matches the legacy
+    # export ranges; newer exports already store Rm in MOhm and Cm in pF.
+    rm_positive = df.loc[df["Rm"] > 0, "Rm"]
+    cm_positive = df.loc[df["Cm"] > 0, "Cm"]
+    rm_median = float(np.median(rm_positive)) if not rm_positive.empty else float("nan")
+    cm_median = float(np.median(cm_positive)) if not cm_positive.empty else float("nan")
+    legacy_cc_units = (
+        np.isfinite(rm_median)
+        and np.isfinite(cm_median)
+        and rm_median < 10.0
+        and cm_median > 1000.0
+    )
+    if legacy_cc_units:
+        df["Rm"] = df["Rm"] * 100.0
+        df["Cm"] = df["Cm"] / 100.0
     return df
 
 
@@ -1262,3 +1288,6 @@ def batch_plot_ephys_means(
 
 if __name__ == "__main__":
     batch_plot_ephys_means()
+
+
+

@@ -1,14 +1,14 @@
 #PatchAnalyzer/utils.py/ephys_analyzer.py
 """ephys_analyzer.py
 ====================
-Unified electrophysiology‑analysis utilities.
+Unified electrophysiology-analysis utilities.
 
 This module consolidates the logic that used to live in
 `PatchAnalyzer.utils.passives` **and** `PatchAnalyzer.utils.spike_params` into
-_two_ classes that provide a clean, object‑oriented façade:
+_two_ classes that provide a clean, object-oriented façade:
 
-* **`VprotAnalyzer`**  – analysis of voltage‑step (voltage‑clamp) sweeps.
-* **`CprotAnalyzer`**  – analysis of current‑clamp sweeps (passives and spikes).
+* **`VprotAnalyzer`**  – analysis of voltage-step (voltage-clamp) sweeps.
+* **`CprotAnalyzer`**  – analysis of current-clamp sweeps (passives and spikes).
 
 Legacy functions in the original modules now proxy to these classes so that
 existing notebooks/scripts keep running unchanged.
@@ -42,21 +42,21 @@ __all__ = [
     "CprotAnalyzer",
 ]
 # ---------------------------------------------------------------------------
-#  Voltage‑step analysis  ───────────────────────────────────────────────────
+#  Voltage-step analysis  ───────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
 @dataclass
 class VprotAnalyzer:
-    """Extract *Ra*, *Rm* and *Cm* from voltage‑step sweeps.
+    """Extract *Ra*, *Rm* and *Cm* from voltage-step sweeps.
 
     Parameters
     ----------
     step_mV
-        Command‑step amplitude in **millivolts** (defaults to +10 mV).
+        Command-step amplitude in **millivolts** (defaults to +10 mV).
     debug
         If *True*, each call to :py:meth:`fit_single_sweep` stores intermediate
         data under :pyattr:`last_debug` **and** returns it together with the
-        tuple ``(Ra_MΩ, Rm_MΩ, Cm_pF)``.  Useful for unit‑tests or inspecting
+        tuple ``(Ra_MΩ, Rm_MΩ, Cm_pF)``.  Useful for unit-tests or inspecting
         failed fits.
     """
 
@@ -64,7 +64,7 @@ class VprotAnalyzer:
     debug: bool = False
 
     # last_debug is populated only when *debug* **or** *return_intermediates*
-    # is True.  Its contents are implementation‑detail and may change.
+    # is True.  Its contents are implementation-detail and may change.
     last_debug: dict[str, Any] = field(default_factory=dict, init=False)
 
     # ─────────────────────────────── public API ──────────────────────────
@@ -151,7 +151,7 @@ class VprotAnalyzer:
 
         If at least one fit succeeds the *aggregate* (``"mean"`` or
         ``"median"``) is returned; otherwise every component is *None*.
-        When *return_all* is *True*, the list of per‑sweep results is appended.
+        When *return_all* is *True*, the list of per-sweep results is appended.
         """
         if aggregate not in {"mean", "median"}:
             raise ValueError("aggregate must be 'mean' or 'median'")
@@ -289,18 +289,18 @@ class VprotAnalyzer:
         return Ra_ohm * 1e-6, Rm_ohm * 1e-6, Cm_F * 1e12  # MΩ, MΩ, pF
 
 # ---------------------------------------------------------------------------
-#  Current‑clamp analysis  ─────────────────────────────────────────────────-
+#  Current-clamp analysis  ─────────────────────────────────────────────────-
 # ---------------------------------------------------------------------------
 
 @dataclass
 class CprotAnalyzer:
-    """Analyse current‑clamp sweeps – passive params & spikes.
+    """Analyse current-clamp sweeps – passive params & spikes.
 
     Parameters
     ----------
     clamp_gain
         Conversion factor from **Volts** applied by the stimulus generator to
-        measured pico‑amps.  The default (``400 pA / V``) matches Axon
+        measured pico-amps.  The default (``400 pA / V``) matches Axon
         Multiclamp 700.
     debug
         Same semantics as in :pyclass:`VprotAnalyzer`.
@@ -311,6 +311,14 @@ class CprotAnalyzer:
     debug: bool = False
     last_debug: dict[str, Any] = field(default_factory=dict, init=False)
 
+    @staticmethod
+    def _as_pA(cmd: np.ndarray, command_units: str = "pA") -> np.ndarray:
+        units = (command_units or "pA").strip().lower()
+        if units == "pa":
+            return np.asarray(cmd, dtype=float)
+        if units == "v":
+            return np.asarray(cmd, dtype=float) * 400.0   # uses cclamp_gain semantics
+        raise ValueError("command_units must be 'pA' or 'V'")
 
     # ───────────────────────── passive parameters ───────────────────────
     def passive_params(
@@ -322,10 +330,10 @@ class CprotAnalyzer:
         baseline_ms: float = 20.0,
         fit_window_ms: float = 80.0,
         min_step_pA: float = 5.0,
+        command_units: str = "pA",
         return_intermediates: bool = False,
     ):
-        # convert stimulus  V → pA
-        cmd_pA = cmd_V * self.cclamp_gain
+        cmd_pA = self._as_pA(cmd_V, command_units=command_units)
         rsp_mV = rsp_V * self.vclamp_gain    # V → mV
 
         dbg: dict[str, Any] = {}
@@ -358,7 +366,7 @@ class CprotAnalyzer:
         )
         tau_s = tau_ms * 1e-3 # convert ms → seconds
         Rin_Ohm = Rin_MOhm*1e6 # convert MOhms →  Ohms
-        Cm_F    = (tau_s / (Rin_Ohm)) if (Rin_GOhm and not np.isnan(tau_ms)) else np.nan 
+        Cm_F    = (tau_s / (Rin_Ohm)) if (Rin_GOhm and not np.isnan(tau_ms)) else np.nan
         Cm_pF = Cm_F*1e12 # F → pF
         # -----------------------------------------------
 
@@ -384,33 +392,39 @@ class CprotAnalyzer:
     def firing_curve(
         self,
         sweeps: Iterable[tuple[np.ndarray, np.ndarray, np.ndarray]],
+        *,
+        command_units: str = "pA",
         **kwargs,
     ) -> 'pd.DataFrame':  # type: ignore[name-defined]
-        """Compute the F–I curve (one row ≙ one sweep).
+        """Compute the F–I curve (one row ≙ one sweep).
 
-        The command arrays must be **Volts**.
+        The command arrays are assumed to be **pA** by default, or **Volts**
+        when ``command_units="V"``.
         """
         import pandas as pd
 
         conv: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         for t, cmd_V, rsp in sweeps:
-            conv.append((t, cmd_V * self.cclamp_gain, rsp*self.vclamp_gain))  # V → mV
+            conv.append((t, self._as_pA(cmd_V, command_units=command_units), rsp*self.vclamp_gain))
         return self._calc_firing_curve(conv, **kwargs)
 
     def spike_metrics(
         self,
         sweeps: Iterable[tuple[np.ndarray, np.ndarray, np.ndarray]],
+        *,
+        command_units: str = "pA",
         **kwargs,
     ) -> 'pd.DataFrame':  # type: ignore[name-defined]
-        """Per‑spike metrics for every spike in *sweeps*.
+        """Per-spike metrics for every spike in *sweeps*.
 
-        The command arrays must be **Volts**.
+        The command arrays are assumed to be **pA** by default, or **Volts**
+        when ``command_units="V"``.
         """
         import pandas as pd
 
         conv: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         for t, cmd_V, rsp in sweeps:
-            conv.append((t, cmd_V * self.cclamp_gain, rsp*self.vclamp_gain))  # V → mV
+            conv.append((t, self._as_pA(cmd_V, command_units=command_units), rsp*self.vclamp_gain))
         return self._calc_spike_metrics(conv, **kwargs)
 
     # ───────────────────────── internal helpers ────────────────────────
@@ -419,8 +433,8 @@ class CprotAnalyzer:
     def _fit_tau(X_rel_s: np.ndarray, Y_mV: np.ndarray, V_ss: float, errors: list[str]):
         """
         Fit the membrane voltage decay with a *single* exponential
-        (no offset term).  The stimulus is assumed to be a hyper‑/depolarising
-        step that has already been centred around the steady‑state level
+        (no offset term).  The stimulus is assumed to be a hyper-/depolarising
+        step that has already been centred around the steady-state level
         (V_ss).  This removes the redundant `b` parameter and allows the fit
         to use negative amplitudes, which is essential for correctly
         estimating τ for hyperpolarising steps.
@@ -428,12 +442,12 @@ class CprotAnalyzer:
         # Convert relative time (seconds) → milliseconds
         X_ms = X_rel_s * 1e3
 
-        # Remove the steady‑state voltage – the exponential will start from 0
+        # Remove the steady-state voltage – the exponential will start from 0
         Y = Y_mV - V_ss
 
         try:
             with np.errstate(over="ignore", under="ignore"):
-                # Fit m * exp(-k * x)  (2‑parameter model)
+                # Fit m * exp(-k * x)  (2-parameter model)
                 popt, _ = opt.curve_fit(
                     lambda x, m, k: m * np.exp(-k * x),
                     X_ms,
@@ -445,7 +459,7 @@ class CprotAnalyzer:
             # τ = 1 / k  (k is in ms⁻¹)
             return 1.0 / popt[1]
         except Exception as exc:
-            errors.append(f"τ‑fit failed: {exc}")
+            errors.append(f"τ-fit failed: {exc}")
             return np.nan
 
 
@@ -562,10 +576,9 @@ class CprotAnalyzer:
                         continue
                     hw_ms = (xloc[-1] - xloc[0]) * dt * 1e3
 
-                    dv_seg = dvdt[pk - win : pk]
-                    below  = np.where(dv_seg < dvdt_threshold_mV_per_ms)[0]
-                    thr_i  = pk - win + below[-1] if below.size else pk
-                    thr_mV = rsp_mV[thr_i]
+                    thr_mV = CprotAnalyzer._spike_threshold_mV(
+                        rsp_mV, dvdt, pk, win, dvdt_threshold_mV_per_ms
+                    )
 
                     dv_max = dvdt[pk - win : pk + win].max()
                     ahp_mV = abs(rsp_mV[pk : pk + int(0.006 / dt)].min() - thr_mV)
@@ -594,6 +607,36 @@ class CprotAnalyzer:
             import warnings
             warnings.warn("; ".join(skips))
         return pd.DataFrame(rows)
+
+    @staticmethod
+    def _spike_threshold_mV(
+        rsp_mV: np.ndarray,
+        dvdt_mV_per_ms: np.ndarray,
+        pk: int,
+        win: int,
+        dvdt_threshold_mV_per_ms: float,
+    ) -> float:
+        start = max(0, pk - win)
+        end = max(pk, start + 1)
+        dv_seg = dvdt_mV_per_ms[start:end]
+        if dv_seg.size == 0:
+            return float(rsp_mV[pk])
+
+        above = dv_seg >= dvdt_threshold_mV_per_ms
+        crossings = np.flatnonzero((~above[:-1]) & above[1:]) if above.size >= 2 else np.array([], dtype=int)
+        if crossings.size:
+            i = int(crossings[0])
+            y0 = float(dv_seg[i])
+            y1 = float(dv_seg[i + 1])
+            frac = 0.0 if y1 == y0 else (dvdt_threshold_mV_per_ms - y0) / (y1 - y0)
+            thr_idx = float(start + i + np.clip(frac, 0.0, 1.0))
+        elif above.size and above[0]:
+            thr_idx = float(start)
+        else:
+            thr_idx = float(start + int(np.argmax(dv_seg)))
+
+        x = np.arange(rsp_mV.size, dtype=float)
+        return float(np.interp(thr_idx, x, rsp_mV))
 
     # --------------------- helper: experimental pulse ------------------
     @staticmethod
@@ -625,5 +668,5 @@ class CprotAnalyzer:
     # ---------------------------- helpers -----------------------------
     @staticmethod
     def _step_current_pA(cmd_pA: np.ndarray, s: int, e: int):
-        """Baseline‑subtracted step amplitude in pico‑amps (no auto‑detect)."""
+        """Baseline-subtracted step amplitude in pico-amps (no auto-detect)."""
         return float(np.mean(cmd_pA[s:e]) - np.median(cmd_pA[: s - 10]))
