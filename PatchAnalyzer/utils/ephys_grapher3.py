@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -560,6 +560,7 @@ def prepare_cell_means(
     tau_max: float = TAU_MAX,
     i_ratio_max: float = I_RATIO_MAX,
     bin_step: float = BIN_STEP,
+    ra_max: float | None = None,
 ) -> Tuple[pd.DataFrame, List[str], pd.DataFrame, pd.Series, pd.DataFrame]:
     cc_df = load_cc_data(cc_csv)
     vc_df = load_vc_data(vc_csv)
@@ -577,6 +578,8 @@ def prepare_cell_means(
         cc_df["Cm_used"] = cc_df["Cm"]
 
     mask = cc_df["Cm"].between(*cm_range) & (cc_df["Tau"] <= tau_max)
+    if ra_max is not None and np.isfinite(ra_max):
+        mask &= cc_df["Ra"].isna() | (cc_df["Ra"] <= float(ra_max))
     cc_df = cc_df.loc[mask].copy()
 
     cm_mean = cc_df.groupby("UID")["Cm_used"].transform("mean")
@@ -669,16 +672,41 @@ def _extract_group_arrays(cell_means: pd.DataFrame, param: str, groups: List[str
     return arrays
 
 
+def plot_param(
+    cell_means: pd.DataFrame,
+    groups: List[str],
+    param: str,
+    colors: Iterable[str] | None = None,
+    savepath: str | None = None,
+) -> Tuple[plt.Figure, plt.Axes, Dict[str, Any]]:
+    """Create a single parameter box/scatter plot using the standard backend styling."""
+    spec = PARAM_SPECS[param]
+    group_arrays = _extract_group_arrays(cell_means, param, groups)
+    ylim = _compute_ylim(group_arrays)
+    palette = list(colors) if colors is not None else _generate_group_colors(len(group_arrays))
+
+    return plot_box_with_scatter(
+        group_arrays,
+        groups,
+        y_label=spec.y_label,
+        title=spec.title,
+        colors=palette,
+        ylim=ylim,
+        savepath=savepath,
+        filter_outliers=True,
+        center="mean",
+        report_filtered_n=True,
+    )
+
+
 def save_param_plot(
     cell_means: pd.DataFrame,
     groups: List[str],
     param: str,
     save_dir: Path | None = None,
+    colors: Iterable[str] | None = None,
 ) -> Dict[str, Any]:
     spec = PARAM_SPECS[param]
-    group_arrays = _extract_group_arrays(cell_means, param, groups)
-    ylim = _compute_ylim(group_arrays)
-    palette = _generate_group_colors(len(group_arrays))
 
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -686,17 +714,12 @@ def save_param_plot(
     else:
         save_target = spec.filename
 
-    fig, _, stats = plot_box_with_scatter(
-        group_arrays,
-        groups,
-        y_label=spec.y_label,
-        title=spec.title,
-        colors=palette,
-        ylim=ylim,
+    fig, _, stats = plot_param(
+        cell_means=cell_means,
+        groups=groups,
+        param=param,
+        colors=colors,
         savepath=str(save_target),
-        filter_outliers=True,
-        center="mean",
-        report_filtered_n=True,
     )
 
     plt.close(fig)
@@ -911,12 +934,20 @@ def plot_firing_curve(
     savepath: str | None = None,
     plot_steps: Iterable[float] | None = None,
     per_cell: pd.DataFrame | None = None,
+    group_colors: Dict[str, str] | None = None,
+    x_bounds: Tuple[float, float] | None = None,
+    y_bounds: Tuple[float, float] | None = None,
 ) -> Tuple[plt.Figure, plt.Axes, Dict[str, Any]]:
     """GraphPad-style firing curve (mean +/- SEM) with two-way ANOVA + Sidak stats."""
     if plot_steps is None:
         step_list = list(np.arange(0, 14, 2))
     else:
         step_list = list(plot_steps)
+    if x_bounds is not None:
+        x_lower, x_upper = sorted((float(x_bounds[0]), float(x_bounds[1])))
+        bounded_steps = [step for step in step_list if x_lower <= float(step) <= x_upper]
+        if bounded_steps:
+            step_list = bounded_steps
     if not step_list:
         step_list = list(np.arange(0, 14, 2))
 
@@ -960,10 +991,18 @@ def plot_firing_curve(
     maxima_by_step: Dict[float, float] = {}
     steps = np.array(step_list, dtype=float)
     palette: Dict[str, str] = {}
+    if group_colors:
+        palette.update(
+            {
+                str(group): str(color)
+                for group, color in group_colors.items()
+                if color is not None and str(color).strip()
+            }
+        )
     if groups:
-        palette[groups[0]] = CTRL_COLOR
+        palette.setdefault(groups[0], CTRL_COLOR)
     if len(groups) > 1:
-        palette[groups[1]] = EXP_COLOR
+        palette.setdefault(groups[1], EXP_COLOR)
 
     def _resolve_colour(name: str) -> str:
         upper = str(name).upper()
@@ -1027,10 +1066,27 @@ def plot_firing_curve(
 
     ax.set_xlabel("Current Density (pA/pF)")
     ax.set_ylabel("AP Frequency (Hz)")
-    ax.set_xlim(0, 13)
-    ax.set_xticks(np.arange(0, 14, 1))
-    ax.set_ylim(0, 100)
-    ax.set_yticks([0, 20, 40, 60, 80, 100])
+    if x_bounds is None:
+        ax.set_xlim(0, 13)
+        ax.set_xticks(np.arange(0, 14, 1))
+    else:
+        x_lower, x_upper = sorted((float(x_bounds[0]), float(x_bounds[1])))
+        ax.set_xlim(x_lower, x_upper)
+        x_tick_start = int(np.floor(x_lower))
+        x_tick_stop = int(np.ceil(x_upper))
+        if x_tick_stop <= x_tick_start:
+            ax.set_xticks([x_lower, x_upper])
+        else:
+            span = x_tick_stop - x_tick_start
+            tick_step = 1 if span <= 12 else max(2, int(np.ceil(span / 10)))
+            ax.set_xticks(np.arange(x_tick_start, x_tick_stop + 1, tick_step))
+    if y_bounds is None:
+        ax.set_ylim(0, 100)
+        ax.set_yticks([0, 20, 40, 60, 80, 100])
+    else:
+        y_lower, y_upper = sorted((float(y_bounds[0]), float(y_bounds[1])))
+        ax.set_ylim(y_lower, y_upper)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
 
     stats_out: Dict[str, Any] = {"anova": None, "sidak": []}
     per_cell_clean: pd.DataFrame | None = None
@@ -1235,13 +1291,12 @@ def _write_results_csv(
 
     results_path.parent.mkdir(parents=True, exist_ok=True)
     df_out.to_csv(results_path, index=False)
-
-
 def batch_plot_ephys_means(
     cc_csv: Path = CSV_PATH,
     vc_csv: Path = V_CSV_PATH,
     cm_source: str = CM_SOURCE,
     save_dir: Path | None = None,
+    ra_max: float | None = None,
 ) -> Dict[str, Any]:
     cell_means, groups, fi_stats, total_cells, fi_cell = prepare_cell_means(
         cc_csv=cc_csv,
@@ -1251,6 +1306,7 @@ def batch_plot_ephys_means(
         tau_max=TAU_MAX,
         i_ratio_max=I_RATIO_MAX,
         bin_step=BIN_STEP,
+        ra_max=ra_max,
     )
 
     if save_dir is None:
